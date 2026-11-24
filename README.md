@@ -80,7 +80,9 @@ New files:
   build of the vendored libraries.
 - `deps/`: vendored, checksum-pinned sources for SDL3, Blend2D and AsmJit,
   with `deps/update.sh` to upgrade them.
-- `sdl/`: the new backend's design notes (`sdl/design.md`); a test VM
+- `sdl/`: the new backend's design notes (`sdl/design.md`); X.Org's
+  `rgb.txt` and the script that turns it into `src/sdl/xcolors.c`
+  (`sdl/tools/`, with X.Org's licence); a test VM
   (`sdl/vm/`, Debian under QEMU, fully pinned); reference graphics tests
   with their expected X11 outputs and comparison tools (`sdl/tests/ref/`);
   and window and event tests (`sdl/tests/win/`).

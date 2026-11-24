@@ -1,0 +1,29 @@
+# Window test: the text cursor, Lower/Raise/Alert, and window icons.
+procedure main()
+   w := open("misc", "g", "size=200,100", "bg=white") | stop("cannot open window")
+   &window := w
+   WAttrib("cursor=on")
+   writes(w, "abc")
+   x := WAttrib("x"); y := WAttrib("y")
+   e := Event()				# waits (scripted key), cursor shown
+   write("event: ", image(e))
+   write("canvas under the cursor unchanged: ",
+      if Pixel(x, y, 1, 1) == "65535,65535,65535" then "yes" else "NO")
+   write("lower: ", if Lower() then "ok" else "FAILED")
+   write("raise: ", if Raise() then "ok" else "FAILED")
+   write("alert: ", if Alert() then "ok" else "FAILED")
+   ic := open("icon", "g", "canvas=hidden", "size=32,32", "bg=orange") |
+      stop("cannot open icon canvas")
+   Fg(ic, "blue"); FillCircle(ic, 16, 16, 12)
+   WriteImage(ic, "icon.gif")
+   write("iconimage from a GIF: ",
+      if WAttrib(w, "iconimage=icon.gif") then "ok" else "FAILED")
+   WriteImage(ic, "icon.png")
+   write("iconimage from a PNG: ",
+      if WAttrib(w, "iconimage=icon.png") then "ok" else "FAILED")
+   write("iconimage: ", WAttrib(w, "iconimage"))
+   write("missing icon file fails: ",
+      if WAttrib(w, "iconimage=no-such.gif") then "NO" else "yes")
+   close(ic)
+   close(w)
+end

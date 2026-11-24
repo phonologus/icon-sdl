@@ -51,31 +51,78 @@ static void ct_add(unsigned int pix, unsigned int r, unsigned int g, unsigned in
    }
 
 /*
+ * Colour names. X allocates each distinct X colour once, under the name
+ * it was first requested by, and WAttrib("fg") reports that name: after
+ * Fg("LightSlateGray"), Fg("light slate gray") reads back as
+ * "LightSlateGray". This table remembers the first name per X colour.
+ */
+typedef struct nentry {
+   unsigned short r, g, b;
+   char name[6 + MAXCOLORNAME];
+   struct nentry *next;
+   } nentry;
+
+static nentry *ntable[CTSIZE];
+
+static char *colour_name(unsigned int r, unsigned int g, unsigned int b, char *name)
+   {
+   nentry *e;
+   int h = (503 * r + 509 * g + 499 * b) % CTSIZE;
+   for (e = ntable[h]; e; e = e->next)
+      if (e->r == r && e->g == g && e->b == b)
+	 return e->name;
+   if (!name || !(e = malloc(sizeof *e)))
+      return name;
+   e->r = r; e->g = g; e->b = b;
+   strncpy(e->name, name, sizeof e->name - 1);
+   e->name[sizeof e->name - 1] = '\0';
+   e->next = ntable[h];
+   ntable[h] = e;
+   return e->name;
+   }
+
+/*
  * sdl_rgb() - allocate the device colour for linear Icon colour r,g,b,
  * as alc_rgb() and xcolor() do in the X backend (including the special
- * cases for black and white, and truncation to unsigned short).
+ * cases for black and white, and truncation to unsigned short). name is
+ * the colour's name as requested; if nameout is not NULL, it receives
+ * the name X would report (the first one this colour was requested by).
  */
-unsigned int sdl_rgb(wbp w, long r, long g, long b)
+unsigned int sdl_rgb(wbp w, long r, long g, long b, char *name, char *nameout)
    {
    unsigned short xr, xg, xb;
    unsigned int pix;
+   char *n;
    double invgamma = 1.0 / w->context->gamma;
    static int inited = 0;
 
    if (!inited) {			/* black and white come first, as in X */
       ct_add(0x000000, 0, 0, 0);
       ct_add(0xFFFFFF, 65535, 65535, 65535);
+      colour_name(0, 0, 0, "black");
+      colour_name(65535, 65535, 65535, "white");
       inited = 1;
       }
-   if (r == 0 && g == 0 && b == 0)
-      return 0x000000;
-   if (r == 65535 && g == 65535 && b == 65535)
-      return 0xFFFFFF;
-   xr = 65535 * pow(r / 65535.0, invgamma);
-   xg = 65535 * pow(g / 65535.0, invgamma);
-   xb = 65535 * pow(b / 65535.0, invgamma);
-   pix = ((xr >> 8) << 16) | ((xg >> 8) << 8) | (xb >> 8);
-   ct_add(pix, xr, xg, xb);
+   if (r == 0 && g == 0 && b == 0) {
+      xr = xg = xb = 0;
+      pix = 0x000000;
+      }
+   else if (r == 65535 && g == 65535 && b == 65535) {
+      xr = xg = xb = 65535;
+      pix = 0xFFFFFF;
+      }
+   else {
+      xr = 65535 * pow(r / 65535.0, invgamma);
+      xg = 65535 * pow(g / 65535.0, invgamma);
+      xb = 65535 * pow(b / 65535.0, invgamma);
+      pix = ((xr >> 8) << 16) | ((xg >> 8) << 8) | (xb >> 8);
+      ct_add(pix, xr, xg, xb);
+      }
+   n = colour_name(xr, xg, xb, name);
+   if (nameout) {
+      strncpy(nameout, n ? n : "", 6 + MAXCOLORNAME - 1);
+      nameout[6 + MAXCOLORNAME - 1] = '\0';
+      }
    return pix;
    }
 
@@ -284,6 +331,10 @@ int free_window(wsp ws)
       if (ws->initpix) {
 	 free(ws->initpix);
 	 ws->initpix = NULL;
+	 }
+      if (ws->iconpx) {
+	 free(ws->iconpx);
+	 ws->iconpx = NULL;
 	 }
       GRFX_UNLINK(ws, wstates);
       }

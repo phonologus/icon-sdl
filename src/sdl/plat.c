@@ -32,6 +32,14 @@
 #include <SDL3/SDL.h>
 #include "sdlgfx.h"
 
+#ifdef __APPLE__
+#include <objc/runtime.h>
+#include <objc/message.h>
+extern void NSBeep(void);		/* AppKit */
+#else
+#include <dlfcn.h>
+#endif
+
 /* X modifier masks, as in sdlwin.h */
 #define X_SHIFT   (1L << 0)
 #define X_CONTROL (1L << 2)
@@ -675,7 +683,75 @@ void pl_present(void *win, void *canvas, int lw, int lh, int full)
 typedef struct { Win *w; int op; int a, b, c, d; const char *s; } WinReq;
 
 enum { R_SHOW, R_TITLE, R_GEOM, R_GETPOS, R_STATE, R_RESIZABLE, R_RAISE,
-   R_CURSOR, R_WARP, R_DISPLAY, R_BEEP, R_MOUSE };
+   R_CURSOR, R_WARP, R_DISPLAY, R_BEEP, R_MOUSE, R_LOWER };
+
+/*
+ * What SDL cannot do: lower a window behind the others, and beep. On
+ * macOS, Cocoa through the Objective-C runtime (plain C calls); under
+ * X11, Xlib, found at run time in the libX11 SDL itself loads, so nothing
+ * extra is linked. Wayland allows neither: nothing happens.
+ */
+#ifdef __APPLE__
+static void native_lower(Win *w)
+{
+   void *nsw = SDL_GetPointerProperty(SDL_GetWindowProperties(w->sw),
+      SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+   if (nsw)
+      ((void (*)(void *, SEL, void *))objc_msgSend)(nsw, sel_registerName("orderBack:"), NULL);
+}
+
+static void native_beep(Win *w, int volume)
+{
+   (void)w;
+   (void)volume;
+   NSBeep();
+}
+#else
+static void *x11fn(const char *name)
+{
+   static void *lib;
+   if (!lib)
+      lib = dlopen("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
+   return lib ? dlsym(lib, name) : NULL;
+}
+
+static void *x11display(Win *w, long *xwin)
+{
+   SDL_PropertiesID p;
+   if (!w) {
+      Win *any = wins;
+      if (!any) return NULL;
+      w = any;
+   }
+   p = SDL_GetWindowProperties(w->sw);
+   if (xwin)
+      *xwin = (long)SDL_GetNumberProperty(p, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+   return SDL_GetPointerProperty(p, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+}
+
+static void native_lower(Win *w)
+{
+   long xw = 0;
+   void *d = x11display(w, &xw);
+   int (*lower)(void *, unsigned long) = (int (*)(void *, unsigned long))x11fn("XLowerWindow");
+   int (*flush)(void *) = (int (*)(void *))x11fn("XFlush");
+   if (d && xw && lower && flush) {
+      lower(d, (unsigned long)xw);
+      flush(d);
+   }
+}
+
+static void native_beep(Win *w, int volume)
+{
+   void *d = x11display(w, NULL);
+   int (*bell)(void *, int) = (int (*)(void *, int))x11fn("XBell");
+   int (*flush)(void *) = (int (*)(void *))x11fn("XFlush");
+   if (d && bell && flush) {
+      bell(d, volume);
+      flush(d);
+   }
+}
+#endif
 
 static SDL_Cursor *cursors[SDL_SYSTEM_CURSOR_COUNT];
 
@@ -735,7 +811,10 @@ static void win_cb(void *p)
       break;
       }
    case R_BEEP:
-      /* SDL has no beep; nothing portable to do yet */
+      native_beep(w, q->a);
+      break;
+   case R_LOWER:
+      native_lower(w);
       break;
    case R_MOUSE: {
       float fx, fy;
@@ -789,7 +868,73 @@ void pl_cursor(void *win, int cursor)
       post_main(cursor_async, (void *)(intptr_t)cursor);
 }
 void pl_warp(void *win, int x, int y) { if (win) winreq(win, R_WARP, x, y, 0, 0, NULL, NULL); }
-void pl_beep(void) { if (sdl_up) winreq(NULL, R_BEEP, 0, 0, 0, 0, NULL, NULL); }
+void pl_beep(int volume) { if (sdl_up) winreq(NULL, R_BEEP, volume, 0, 0, 0, NULL, NULL); }
+void pl_lower(void *win) { if (win) winreq(win, R_LOWER, 0, 0, 0, 0, NULL, NULL); }
+
+typedef struct { Win *w; const unsigned int *px; int iw, ih; } IconReq;
+
+static void icon_cb(void *p)
+{
+   IconReq *q = p;
+   SDL_Surface *s = SDL_CreateSurfaceFrom(q->iw, q->ih, SDL_PIXELFORMAT_ARGB8888,
+      (void *)q->px, q->iw * 4);
+   if (s) {
+      SDL_SetWindowIcon(q->w->sw, s);
+      SDL_DestroySurface(s);
+   }
+}
+
+void pl_icon(void *win, const unsigned int *px, int iw, int ih)
+{
+   IconReq q;
+   if (!win || !px || iw <= 0 || ih <= 0)
+      return;
+   q.w = win; q.px = px; q.iw = iw; q.ih = ih;
+   call_main(icon_cb, &q);
+}
+
+/*
+ * The text cursor: drawn into the staging copy only, as X draws it on the
+ * window but not in the backing pixmap. Marking the area changed in the
+ * canvas afterwards (cv_dirty) restores it at the next present.
+ */
+void pl_overlay(void *win, int x, int y, int w, int h, unsigned int rgb, int s)
+{
+   Win *wn = win;
+   int r[4];
+   if (!wn || w <= 0 || h <= 0)
+      return;
+   pthread_mutex_lock(&pmu);
+   if (!wn->st) {
+      pthread_mutex_unlock(&pmu);
+      return;
+   }
+   r[0] = x * s; r[1] = y * s; r[2] = (x + w) * s; r[3] = (y + h) * s;
+   if (r[0] < 0) r[0] = 0;
+   if (r[1] < 0) r[1] = 0;
+   if (r[2] > wn->sw_) r[2] = wn->sw_;
+   if (r[3] > wn->sh_) r[3] = wn->sh_;
+   for (int yy = r[1]; yy < r[3]; yy++) {
+      unsigned int *p = (unsigned int *)(wn->st + yy * wn->ststride);
+      for (int xx = r[0]; xx < r[2]; xx++)
+         p[xx] = 0xFF000000u | rgb;
+   }
+   if (r[2] > r[0] && r[3] > r[1]) {
+      if (wn->pend[0] < 0)
+         memcpy(wn->pend, r, sizeof r);
+      else {
+         if (r[0] < wn->pend[0]) wn->pend[0] = r[0];
+         if (r[1] < wn->pend[1]) wn->pend[1] = r[1];
+         if (r[2] > wn->pend[2]) wn->pend[2] = r[2];
+         if (r[3] > wn->pend[3]) wn->pend[3] = r[3];
+      }
+      if (!wn->posted) {
+         wn->posted = 1;
+         post_main(present_async, wn);
+      }
+   }
+   pthread_mutex_unlock(&pmu);
+}
 void pl_display_size(void *win, int *w, int *h)
 {
    WinReq q;

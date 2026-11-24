@@ -342,7 +342,8 @@ int		bigrand		(dptr da, dptr dx);
       void	unsetclip	(wbp w);
       int	seticonimage	(wbp w, dptr dp);
       wfp	alc_font	(wbp w, char **s);
-      unsigned int sdl_rgb	(wbp w, long r, long g, long b);
+      unsigned int sdl_rgb	(wbp w, long r, long g, long b, char *name,
+				   char *nameout);
       void	sdl_lcolor	(wbp w, unsigned int pix, long *r, long *g,
 				   long *b);
       void	sdl_unmap	(wsp ws);

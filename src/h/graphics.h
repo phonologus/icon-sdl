@@ -375,6 +375,8 @@ typedef struct _wstate {
       int	iconic;			/* NormalState, IconicState, ... */
       unsigned int *initpix;		/* image= file read by src/sdl, */
       int	initw, inith;		/*  drawn when the canvas is made */
+      unsigned int *iconpx;		/* iconimage=, 0xAARRGGBB */
+      int	iconpw, iconph;
    #endif				/* SDLGraphics */
 
    } wstate, *wsp;

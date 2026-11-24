@@ -65,6 +65,12 @@ int cv_save(void *cv, const char *path, int x, int y, int w, int h);
 /* returns 0xAARRGGBB pixels (malloc'd) or NULL */
 unsigned int *cv_load(const char *path, int *w, int *h);
 
+/* mark a logical area as changed (to be shown again) */
+void cv_dirty(void *cv, int x, int y, int w, int h);
+
+/* X's colour names (xcolors.c): 8-bit device values; 1 if found */
+int xcolor_lookup(const char *name, int *r, int *g, int *b);
+
 /* for the platform layer: the device pixels and what changed */
 void cv_pixels(void *cv, unsigned char **p, long *stride, int *pw, int *ph);
 int cv_take_dirty(void *cv, int r[4]);
@@ -125,7 +131,13 @@ void pl_cursor(void *win, int cursor);	/* PLC_* */
 #define PLC_SW		18
 #define PLC_W		19
 void pl_warp(void *win, int x, int y);
-void pl_beep(void);
+void pl_beep(int volume);
+void pl_lower(void *win);
+/* the window's icon, from w x h pixels 0xAARRGGBB */
+void pl_icon(void *win, const unsigned int *px, int w, int h);
+/* show a filled rectangle (logical coordinates, colour 0xRRGGBB) over the
+ * window's current contents, without changing its canvas: the text cursor */
+void pl_overlay(void *win, int x, int y, int w, int h, unsigned int rgb, int scale);
 void pl_display_size(void *win, int *w, int *h);
 int pl_global_mouse(int *x, int *y);
 

@@ -1,0 +1,18 @@
+# Reference test: X colour names (rgb.txt) that Icon's own colour phrases
+# don't cover, in both spellings and mixed case; their pixels, read back.
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=200,60", "bg=white") |
+      stop("cannot open window")
+   names := ["LightSlateGray", "light slate gray", "NavajoWhite", "gray50",
+      "grey17", "DarkOliveGreen3", "MediumAquamarine", "papaya whip",
+      "SNOW", "no such colour"]
+   every i := 1 to *names do {
+      if Fg(names[i]) then {
+         FillRectangle(10 * i, 10, 10, 40)
+         write(left(names[i], 18), " ", Fg(), " -> ", Pixel(10 * i, 10, 1, 1))
+         }
+      else
+         write(left(names[i], 18), " fails")
+      }
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

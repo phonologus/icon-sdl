@@ -1,0 +1,9 @@
+event: "z"
+canvas under the cursor unchanged: yes
+lower: ok
+raise: ok
+alert: ok
+iconimage from a GIF: ok
+iconimage from a PNG: ok
+iconimage: icon.png
+missing icon file fails: yes

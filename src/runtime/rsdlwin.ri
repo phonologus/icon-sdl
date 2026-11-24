@@ -167,6 +167,8 @@ static int mkwin(wbp w, int *scale)
    if (ws->win == NULL)
       return Failed;
    nwins++;
+   if (ws->iconpx)
+      pl_icon(ws->win, ws->iconpx, ws->iconpw, ws->iconph);
    return Succeeded;
    }
 
@@ -503,18 +505,39 @@ void wsync(wbp w) { if (nwins) present(0); }
  */
 int wgetq(wbp w, dptr res)
    {
+   wsp ws = w->window;
+   int cx = 0, cy = 0, cw = 0, ch = 0, posted = 0;
+
    for (;;) {
       if (nwins && process_events() < 0)
 	 return -1;
       if (!EVQUEEMPTY(w)) {
 	 EVQUEGET(w, *res);
-	 return 1;
+	 break;
 	 }
-      if (w->window->win == NULL)
+      if (ws->win == NULL)
 	 return -1;
+      if (posted)			/* restore under the cursor */
+	 cv_dirty(ws->canvas, cx, cy, cw, ch);
       present(0);
+      /*
+       * The text cursor (cursor=on), as rxwin.ri's postcursor draws it:
+       * a fg bar the width of a character and the height of the descent,
+       * below the text position, on the window but not in its canvas.
+       */
+      posted = 0;
+      if (ISCURSORON(w) && ws->canvas) {
+	 cx = ws->x; cy = ws->y; cw = FWIDTH(w); ch = DESCENT(w);
+	 pl_overlay(ws->win, cx, cy, cw, ch, w->context->fg, cv_scale(ws->canvas));
+	 posted = 1;
+	 }
       pl_wait(-1);
       }
+   if (posted) {			/* scrubcursor */
+      cv_dirty(ws->canvas, cx, cy, cw, ch);
+      present(0);
+      }
+   return 1;
    }
 
 /*
@@ -807,19 +830,12 @@ int setcursor(wbp w, int on)
  * ---------------------------------------------------------------------
  */
 
-static void colorname(char *dst, char *s)
-   {
-   strncpy(dst, s, 6 + MAXCOLORNAME - 1);
-   dst[6 + MAXCOLORNAME - 1] = '\0';
-   }
-
 int setfg(wbp w, char *s)
    {
    long r, g, b;
    if (parsecolor(w, s, &r, &g, &b) != Succeeded)
       return Failed;
-   w->context->fg = sdl_rgb(w, r, g, b);
-   colorname(w->context->fgname, s);
+   w->context->fg = sdl_rgb(w, r, g, b, s, w->context->fgname);
    return Succeeded;
    }
 
@@ -828,8 +844,7 @@ int setbg(wbp w, char *s)
    long r, g, b;
    if (parsecolor(w, s, &r, &g, &b) != Succeeded)
       return Failed;
-   w->context->bg = sdl_rgb(w, r, g, b);
-   colorname(w->context->bgname, s);
+   w->context->bg = sdl_rgb(w, r, g, b, s, w->context->bgname);
    return Succeeded;
    }
 
@@ -873,8 +888,24 @@ int setgamma(wbp w, double gamma)
    return Succeeded;
    }
 
-/* X colour names (rgb.txt) beyond Icon's own: not yet supported. */
-int nativecolor(wbp w, char *s, long *r, long *g, long *b) { return 0; }
+/*
+ * nativecolor() - X's colour names (rgb.txt), for names Icon's own
+ * colour phrases don't cover. As XParseColor gives 16-bit values (the
+ * 8-bit ones times 257), converted to linear Icon colour as rxwin.ri's
+ * lcolor() does.
+ */
+int nativecolor(wbp w, char *s, long *r, long *g, long *b)
+   {
+   int R, G, B;
+   double gamma;
+   if (!w || !xcolor_lookup(s, &R, &G, &B))
+      return 0;
+   gamma = w->context->gamma;
+   *r = 65535 * pow((R * 257) / 65535.0, gamma);
+   *g = 65535 * pow((G * 257) / 65535.0, gamma);
+   *b = 65535 * pow((B * 257) / 65535.0, gamma);
+   return 1;
+   }
 
 void freecolor(wbp w, char *s) { }
 
@@ -1047,8 +1078,11 @@ int strimage(wbp w, int x, int y, int width, int height,
    if (n <= 0)
       return 0;
    for (c = 0; c < 256; c++)
-      if (e[c].used && e[c].valid)
-	 pix[c] = sdl_rgb(w, e[c].clr.red, e[c].clr.green, e[c].clr.blue);
+      if (e[c].used && e[c].valid) {
+	 char tmp[24];			/* named as rxwin.ri's strimage does */
+	 sprintf(tmp, "%ld,%ld,%ld", e[c].clr.red, e[c].clr.green, e[c].clr.blue);
+	 pix[c] = sdl_rgb(w, e[c].clr.red, e[c].clr.green, e[c].clr.blue, tmp, NULL);
+	 }
    px = calloc(n, sizeof(unsigned int));
    op = calloc(n, 1);
    if (!px || !op) {
@@ -1420,7 +1454,69 @@ int seticonlabel(wbp w, char *val)
    w->window->iconlabel = salloc(val);
    return Succeeded;
    }
-int seticonimage(wbp w, dptr dp) { return Failed; }
+/*
+ * seticonimage() - iconimage=: another window's contents, or an image
+ * file (GIF, read by Icon's own reader; or PNG, JPEG, BMP, QOI). It
+ * becomes the window's icon (on macOS, the application's Dock icon).
+ */
+int seticonimage(wbp w, dptr dp)
+   {
+   wsp ws = w->window;
+   unsigned int *px = NULL;
+   int iw = 0, ih = 0, i;
+   char *name;
+   tended char *tmp;
+   struct imgdata imd;
+
+   if (is:file(*dp) && (BlkLoc(*dp)->file.status & Fs_Window)) {
+      wbp x = (wbp)BlkLoc(*dp)->file.fd;
+      if (!x->window->canvas)
+	 return Failed;
+      iw = x->window->width;
+      ih = x->window->height;
+      px = malloc(iw * ih * sizeof(unsigned int));
+      if (!px)
+	 ReturnErrNum(305, Error);
+      cv_read(x->window->canvas, 0, 0, iw, ih, x->context->bg, px);
+      for (i = 0; i < iw * ih; i++)
+	 px[i] |= 0xFF000000u;
+      name = x->window->windowlabel;
+      }
+   else if (is:string(*dp)) {
+      if (!cnv:C_string(*dp, tmp))
+	 ReturnErrVal(103, *dp, Error);
+      name = tmp;
+      if (readGIF(tmp, 0, &imd) == Succeeded) {
+	 iw = imd.width;
+	 ih = imd.height;
+	 px = malloc(iw * ih * sizeof(unsigned int));
+	 if (px)
+	    for (i = 0; i < iw * ih; i++) {
+	       struct palentry *e = &imd.paltbl[imd.data[i]];
+	       px[i] = e->valid ? 0xFF000000u |
+		  sdl_rgb(w, e->clr.red, e->clr.green, e->clr.blue, NULL, NULL) : 0;
+	       }
+	 free((pointer)imd.paltbl);
+	 free((pointer)imd.data);
+	 }
+      else
+	 px = cv_load(tmp, &iw, &ih);
+      if (!px)
+	 return Failed;
+      }
+   else
+      return Error;
+
+   if (ws->iconimage) free(ws->iconimage);
+   ws->iconimage = salloc(name ? name : "");
+   if (ws->iconpx) free(ws->iconpx);
+   ws->iconpx = px;
+   ws->iconpw = iw;
+   ws->iconph = ih;
+   if (ws->win)
+      pl_icon(ws->win, px, iw, ih);
+   return Succeeded;
+   }
 int setwindowlabel(wbp w, char *val)
    {
    if (w->window->windowlabel) free(w->window->windowlabel);
@@ -1437,8 +1533,13 @@ int raiseWindow(wbp w)
       pl_raise(w->window->win);
    return Succeeded;
    }
-int lowerWindow(wbp w) { return Succeeded; }	/* SDL cannot lower */
-int walert(wbp w, int volume) { pl_beep(); return Succeeded; }
+int lowerWindow(wbp w)
+   {
+   if (w->window->win)
+      pl_lower(w->window->win);
+   return Succeeded;
+   }
+int walert(wbp w, int volume) { pl_beep(volume); return Succeeded; }
 
 /*
  * ---------------------------------------------------------------------

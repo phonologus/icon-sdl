@@ -830,6 +830,14 @@ void cv_pixels(void *cv, unsigned char **p, long *stride, int *pw, int *ph)
    *ph = c->ph;
 }
 
+void cv_dirty(void *cv, int x, int y, int w, int h)
+{
+   Canvas *c = cv;
+   int r[4];
+   if (region(c, NULL, x, y, x + w, y + h, 0, r))
+      touch(c, r[0], r[1], r[2], r[3]);
+}
+
 int cv_take_dirty(void *cv, int r[4])
 {
    Canvas *c = cv;

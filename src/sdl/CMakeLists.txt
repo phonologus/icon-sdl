@@ -24,7 +24,7 @@ set(BLEND2D_NO_INSTALL ON CACHE BOOL "" FORCE)
 set(ASMJIT_DIR "${DEPS}/asmjit" CACHE PATH "" FORCE)
 add_subdirectory("${DEPS}/blend2d" blend2d)
 
-add_library(iconsdl STATIC sdlgfx.c canvas.c fontmac.c plat.c)
+add_library(iconsdl STATIC sdlgfx.c canvas.c fontmac.c plat.c xcolors.c)
 set_property(TARGET iconsdl PROPERTY C_STANDARD 11)
 target_compile_options(iconsdl PRIVATE -Wall -Wextra)
 target_link_libraries(iconsdl PRIVATE SDL3::SDL3-static blend2d::blend2d)
