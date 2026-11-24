@@ -13,21 +13,50 @@ Icon project at the University of Arizona:
 
 Please don't report problems with this fork upstream.
 
-**Status: work in progress, usable.** The `macintosh-sdl` configuration
-builds and passes Icon's test suite. Windows, events and hidden canvases
-work. Drawing, images and `Pixel()` match the X11 backend, most of it
-pixel for pixel; events (keys, X keysyms, mouse, drags, resizes) are
-reported as X reports them. `sdl/design.md` lists what is still missing.
+**Status: work in progress, usable on macOS.** The `macintosh-sdl`
+configuration builds and passes Icon's test suite. Windows, events and
+hidden canvases work:
+- drawing, images and `Pixel()` match the X11 backend, most of it pixel
+  for pixel;
+- events (keys, X keysyms, mouse, drags, resizes) are reported as X
+  reports them;
+- text uses the system's OpenType fonts.
+
+Linux is not yet done. `sdl/design.md` lists what is still missing.
 
 ## Building (macOS)
 
     make SDL-Configure name=macintosh-sdl
     make Icont
+    make Ilib
 
 You need the Xcode Command Line Tools and CMake. SDL3, Blend2D and AsmJit
-are built from the checksum-pinned sources in `deps/`; no network access,
-Homebrew or XQuartz is used. The other configurations (`make Configure`,
-`make X-Configure`) work exactly as upstream.
+are built from the checksum-pinned sources in `deps/`. No network access,
+Homebrew or XQuartz is used. `make Ilib` builds the Icon Program Library,
+which graphics programs such as `vib` need. The other configurations
+(`make Configure`, `make X-Configure`) work exactly as upstream.
+
+Use this tree's `bin/icont`. Put `bin` first on your `PATH`, or name it
+explicitly, for example `make ICONT=/path/to/icon-sdl/bin/icont` for
+the IPL's Makefiles. Another Icon installation on the `PATH` would
+otherwise be used.
+
+Optional environment variables:
+
+| Variable | Effect |
+|---|---|
+| `ICONSDL_SCALE=1` | Draw windows at 1× instead of the display's scale (2× on Retina): pixels then read back exactly as with X, but look coarser |
+| `ICONSDL_META=command` | `&meta` is the Command key instead of Option |
+| `ICONSDL_FRAME_MS=n` | While a program draws without pausing, show its windows every *n* ms (default 100) |
+
+## Tests
+
+| Command | Checks |
+|---|---|
+| `make Test` | Icon's own test suite (after `make Ilib`) |
+| `sdl/tests/ref/run-sdl.sh .` | The reference graphics programs, against images and output from the X11 backend |
+| `sdl/tests/win/run.sh .` | Real windows and events, with scripted input (needs a display) |
+| `sdl/tests/ref/make-reference.sh --check` | Builds this tree with X11 in the test VM and checks that its output is unchanged |
 
 ## Branches
 
@@ -52,11 +81,14 @@ New files:
 - `deps/`: vendored, checksum-pinned sources for SDL3, Blend2D and AsmJit,
   with `deps/update.sh` to upgrade them.
 - `sdl/`: the new backend's design notes (`sdl/design.md`); a test VM
-  (`sdl/vm/`, Debian under QEMU, fully pinned); and reference graphics
-  tests with their expected X11 outputs (`sdl/tests/ref/`).
+  (`sdl/vm/`, Debian under QEMU, fully pinned); reference graphics tests
+  with their expected X11 outputs and comparison tools (`sdl/tests/ref/`);
+  and window and event tests (`sdl/tests/win/`).
 
-Modified upstream files. Each change only adds an SDL graphics case,
-except the test:
+Modified upstream files. Most changes only add an SDL graphics case,
+leaving the other configurations untouched. In the X11 configuration the
+whole tree builds and passes Icon's test suite, and gives byte-identical
+graphics output to upstream:
 
 - `Makefile`: the `SDL-Configure` target, its usage line, and building
   `src/sdl` (which does nothing in other configurations).
