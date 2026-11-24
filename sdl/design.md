@@ -284,6 +284,10 @@ The counts are the line counts of the X implementation.
    goes through a coverage mask with a 50% threshold, which the drawops
    need anyway. That makes most of the output pixel-identical to X.
    Plain text stays antialiased. See "The canvas layer" below.
+   Confirmed by Sean, 2026-11-24.
+6. **Window scale:** visible windows are drawn at the display's scale
+   (2× on Retina) by default, for sharp output. `ICONSDL_SCALE=1` gives
+   pixels identical to a hidden canvas (and to X). Agreed 2026-11-24.
 
 ## Test VM and reference outputs
 
