@@ -13,9 +13,11 @@ Icon project at the University of Arizona:
 
 Please don't report problems with this fork upstream.
 
-**Status: early work in progress.** The `macintosh-sdl` configuration
-builds and passes Icon's test suite, but the backend is still a skeleton:
-`open(..., "g")` fails.
+**Status: work in progress.** The `macintosh-sdl` configuration builds
+and passes Icon's test suite. Hidden canvases (`canvas=hidden`) work
+completely: drawing, text, images and `Pixel()` match the X11 backend,
+most of it pixel for pixel. Visible windows and events are not yet
+ported.
 
 ## Building (macOS)
 
@@ -66,7 +68,9 @@ except the test:
 - `src/h/rproto.h`: prototypes of the SDL backend's own routines.
 - `src/runtime/rwinsys.r`, `src/runtime/rwinrsc.r`: include the SDL
   backend files.
-- `src/runtime/Makefile`: dependencies on the SDL backend files.
+- `src/runtime/Makefile`: dependencies on the SDL backend files, and
+  `$(XDEPS)` (empty unless the configuration sets it) so that iconx is
+  relinked when `libiconsdl.a` changes.
 - `tests/general/kwds.icn`: also ignore the optional feature
   "SDL graphics", as it already ignores "graphics" and "X Windows".
 

@@ -275,13 +275,15 @@ The counts are the line counts of the X implementation.
 2. **XBM/XPM images:** dropped at first. GIF stays (portable code), and
    PNG, JPEG and BMP come from Blend2D. A small XBM reader can be added
    later if IPL programs need it.
-3. **Gamma:** 2.5, like X, so that output can be compared pixel for pixel
-   against the X11 reference.
+3. **Gamma:** like X, so that output can be compared pixel for pixel
+   against the X11 reference. X's effective default turned out to be
+   2.27630272, not the nominal 2.5; see "Gamma" below.
 4. **`&meta` on macOS:** the Option key, as XQuartz maps it; Command
    available through a setting.
-5. **Antialiasing:** accepted. Axis-aligned shapes match X exactly at
-   integer scale. Diagonals and arcs are compared against the reference
-   with a tolerance.
+5. **Antialiasing:** superseded. Geometry is aliased like X's: every shape
+   goes through a coverage mask with a 50% threshold, which the drawops
+   need anyway. That makes most of the output pixel-identical to X.
+   Plain text stays antialiased. See "The canvas layer" below.
 
 ## Test VM and reference outputs
 
@@ -375,3 +377,114 @@ Verified (2026-11-24):
 | `macintosh` without graphics, from this branch | full test suite passes; `src/sdl` does nothing |
 | Linux X11, from this branch, in the VM | full test suite passes; `make-reference.sh --check` gives byte-identical output |
 | `macintosh-sdl` from a fresh copy, network denied by `sandbox-exec` | builds |
+
+## The canvas layer (src/sdl/canvas.c)
+
+Each window state owns a canvas, the equivalent of X's backing pixmap:
+an opaque PRGB32 Blend2D image at an integer scale (1 for hidden
+canvases; the display's backing scale for windows). Logical pixel
+(x, y) is the s-by-s block of device pixels at (s*x, s*y). Pixel reads
+(`Pixel`, `WriteImage`, `capture`) sample the block's top-left device
+pixel.
+
+Pixels hold device colours 0xRRGGBB, exactly what a 24-bit TrueColor X
+display holds:
+
+1. An Icon colour (linear, 16 bits per channel) is gamma-corrected to a
+   16-bit "X colour", truncated as X's `xcolor()` does.
+2. The top 8 bits per channel are the pixel.
+3. `rsdlrsc.ri` keeps X's table from pixel to the X colour that made it,
+   with the first allocation winning. `Pixel()` returns exactly what the
+   X backend returns: the stored colour if there is one, otherwise the
+   8-bit value × 257, each passed back through gamma.
+
+Drawing a shape:
+
+1. Blend2D rasterises the shape into an A8 coverage mask over its
+   bounding box.
+2. Every device pixel with at least half coverage is combined with the
+   canvas by the X GC function: 16 drawops; `reverse` is xor with
+   fg ^ bg.
+3. The fill pattern applies: `masked` draws only set bits, `textured`
+   draws the others in bg.
+
+One code path therefore gives aliased geometry, every drawop and stippled
+fills.
+
+Geometry follows X:
+
+- **Coordinates:** integer coordinates are pixel centres, so strokes,
+  arcs and polygons are drawn through (x + 0.5, y + 0.5). Rectangle fills
+  cover [x, x+w).
+- **Fills:** polygons use the even-odd rule; partial arc fills are pie
+  slices.
+- **Caps and joins:** lines have projecting (square) caps and mitre
+  joins.
+- **Dashes:** 4 on, 4 off for width ≤ 1, and 3 × width for wider lines
+  (Icon sets the dash list). The pattern continues across a polyline's
+  vertices.
+- **`striped`:** X's LineDoubleDash. The whole line is drawn in bg with
+  its ends capped, then the even dashes in fg with butt ends.
+- **The tie rule:** X includes a pixel whose centre lies exactly on a
+  shape's top or left edge and excludes one on its bottom or right edge.
+  Such a pixel is exactly half covered, so all geometry is shifted up and
+  left by 1/64 device pixel to resolve ties the same way. For straight
+  edges, coverage ≥ 50% is otherwise the same test as "centre inside".
+
+Text:
+
+- Drawn with Blend2D from fonts found by CoreText. Icon strings are
+  treated as Latin-1, like X's ISO 8859-1 fonts.
+- Plain text in copy mode is antialiased. With other drawops or patterns
+  it goes through the mask like geometry.
+- Text written with `write()` first fills its cell with bg in copy mode
+  (X's `XDrawImageString`).
+
+Font metrics follow X:
+
+- `ascent` and `descent` come from the font.
+- `fwidth` is the widest printable Latin-1 character, like X's
+  `max_bounds.width` for an ISO 8859-1 font. The whole font's maximum
+  advance includes far wider symbols.
+- Loading a font sets `leading` to its height, but finding a font already
+  loaded does not (X's `tryfont`). The default font is preloaded, so
+  `Font("fixed")` leaves `leading` alone, as in X.
+
+## Gamma
+
+The X backend does not use `GammaCorrection` (2.5). `alc_display` asks
+Xlib for the device value of `RGBi:.5/.5/.5` and sets the gamma to
+`log(.5)/log(g)`. On a display without colour calibration (the usual
+case, and the reference setup), Xlib answers 49408,47872,47872, so the
+gamma is 2.27630272. `rsdlrsc.ri` computes it the same way, from those
+values, so the result is the identical double. With 2.5, colours drawn
+with drawops other than copy came out wrong. Plain colours looked right,
+because `Pixel()` round-trips through the same gamma.
+
+## Comparing with the X11 reference
+
+    sdl/tests/ref/run-sdl.sh ICONDIR [OUTDIR]
+
+This runs every reference program with the Icon build in ICONDIR and
+compares the results with `expected/`:
+
+- standard output must match exactly;
+- images are compared pixel by pixel by `compare.py` (a GIF decoder in
+  the Python standard library, checked against macOS's own decoder),
+  which also writes `NAME.diff.png` for each image;
+- `sdl/tests/ref/tolerance` lists the differences accepted per test.
+
+Results with hidden canvases (2026-11-24):
+
+| Test | Result |
+|---|---|
+| `drawops`, `images`, `patterns` | pixel-identical; `Pixel()` output identical |
+| `lines` | 7 pixels differ: corners of even-width line caps, where coverage and "centre inside" disagree |
+| `shapes` | 50 pixels differ: edge pixels of filled circles and slanted 1-pixel outlines |
+| `clipcopy` | 22 pixels differ: X's own algorithm for thin arcs |
+| `text` | differs, as expected: other fonts. Metrics are close (fwidth within a pixel) and `leading` behaves identically |
+
+The `Pixel()` output compares exactly only because a colour reads back
+the same on both sides. The probe that found the gamma used the fact
+that a pixel the colour table doesn't know reads back as its 8-bit value
+× 257 through gamma, which can be inverted to see the raw pixel.

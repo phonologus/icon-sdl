@@ -29,7 +29,7 @@ RTT = ../rtt/rtt
 .r.c:	; $(RTT) -x $*.r
 
 
-iconx: $(COBJS) $(XOBJS)
+iconx: $(COBJS) $(XOBJS) $(XDEPS)
 	cd ../common; $(MAKE)
 	$(CC) $(RLINK) -o iconx $(XOBJS) $(COBJS) $(XL) $(RLIBS) $(TLIBS)
 	rm -f ../../bin/iconx$(EXE)

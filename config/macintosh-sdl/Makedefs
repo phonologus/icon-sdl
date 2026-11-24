@@ -9,6 +9,7 @@
 #  TLIBS    libraries to link for POSIX threads
 #  XLIBS    libraries to link for graphics
 #  SFLAGS   flags for stripping iconx
+#  XDEPS    files iconx must be relinked after (icon-sdl addition)
 #
 #  XLIBS links src/sdl's library and the vendored SDL3 and Blend2D (built
 #  statically from deps/ by src/sdl/Makefile), the macOS frameworks they
@@ -30,3 +31,4 @@ XLIBS = ../sdl/libiconsdl.a $(SDLB)/cmake/sdl3/libSDL3.a \
 	-framework IOKit -framework Metal -framework QuartzCore \
 	-weak_framework UniformTypeIdentifiers
 SFLAGS = -Sx
+XDEPS = ../sdl/libiconsdl.a

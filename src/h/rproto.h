@@ -341,6 +341,11 @@ int		bigrand		(dptr da, dptr dx);
       int	displayWidth	(wbp w);
       void	unsetclip	(wbp w);
       int	seticonimage	(wbp w, dptr dp);
+      wfp	alc_font	(wbp w, char **s);
+      unsigned int sdl_rgb	(wbp w, long r, long g, long b);
+      void	sdl_lcolor	(wbp w, unsigned int pix, long *r, long *g,
+				   long *b);
+      void	sdl_unmap	(wsp ws);
    #endif				/* SDLGraphics */
 
    #ifdef WinGraphics

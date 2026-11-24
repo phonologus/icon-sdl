@@ -3,15 +3,183 @@
  * (icon-sdl fork; MIT licence, see LICENSE.md).
  *
  * Contexts and window states are reference counted and linked into the
- * global chains (wcntxts, wstates) exactly as in rxrsc.ri. Colours are
- * plain RGB values in the context, so there is no colormap to manage.
+ * global chains (wcntxts, wstates) as in rxrsc.ri.
+ *
+ * Colours. The canvas holds device colours 0xRRGGBB, exactly as a 24-bit
+ * TrueColor X display would: an Icon colour (linear, 0..65535 per
+ * channel) is gamma-corrected to a 16-bit "X colour", whose top 8 bits
+ * per channel are the pixel. Like X, we remember the X colour of every
+ * pixel value we hand out, the first allocation winning, so that Pixel()
+ * returns exactly what the X backend returns (rxwin.ri getpixel).
  */
 
+#include "../sdl/sdlgfx.h"
+
+/* ---------- colours ---------- */
+
+#define CTSIZE 4096			/* colour table hash size */
+
+typedef struct ctentry {
+   unsigned int pix;			/* device colour 0xRRGGBB */
+   unsigned short r, g, b;		/* the X colour that made it */
+   struct ctentry *next;
+   } ctentry;
+
+static ctentry *ctable[CTSIZE];
+
+static ctentry *ct_find(unsigned int pix)
+   {
+   ctentry *e;
+   for (e = ctable[(pix ^ (pix >> 12)) % CTSIZE]; e; e = e->next)
+      if (e->pix == pix)
+	 return e;
+   return NULL;
+   }
+
+static void ct_add(unsigned int pix, unsigned int r, unsigned int g, unsigned int b)
+   {
+   ctentry *e;
+   int h = (pix ^ (pix >> 12)) % CTSIZE;
+   if (ct_find(pix))
+      return;				/* the first allocation wins */
+   e = malloc(sizeof *e);
+   if (!e)
+      return;
+   e->pix = pix; e->r = r; e->g = g; e->b = b;
+   e->next = ctable[h];
+   ctable[h] = e;
+   }
+
 /*
- * The default font until the backend resolves real fonts: X's "fixed"
- * metrics, so that text layout code has sane values.
+ * sdl_rgb() - allocate the device colour for linear Icon colour r,g,b,
+ * as alc_rgb() and xcolor() do in the X backend (including the special
+ * cases for black and white, and truncation to unsigned short).
  */
-static wfont sdl_deffont = { 1, 0, NULL, NULL, "fixed", 11, 2, 13, 6, NULL };
+unsigned int sdl_rgb(wbp w, long r, long g, long b)
+   {
+   unsigned short xr, xg, xb;
+   unsigned int pix;
+   double invgamma = 1.0 / w->context->gamma;
+   static int inited = 0;
+
+   if (!inited) {			/* black and white come first, as in X */
+      ct_add(0x000000, 0, 0, 0);
+      ct_add(0xFFFFFF, 65535, 65535, 65535);
+      inited = 1;
+      }
+   if (r == 0 && g == 0 && b == 0)
+      return 0x000000;
+   if (r == 65535 && g == 65535 && b == 65535)
+      return 0xFFFFFF;
+   xr = 65535 * pow(r / 65535.0, invgamma);
+   xg = 65535 * pow(g / 65535.0, invgamma);
+   xb = 65535 * pow(b / 65535.0, invgamma);
+   pix = ((xr >> 8) << 16) | ((xg >> 8) << 8) | (xb >> 8);
+   ct_add(pix, xr, xg, xb);
+   return pix;
+   }
+
+/*
+ * sdl_lcolor() - the linear Icon colour of a device pixel, as getpixel()
+ * computes it in the X backend: from the remembered X colour if there is
+ * one, otherwise from the 8-bit value (what XQueryColor returns).
+ */
+void sdl_lcolor(wbp w, unsigned int pix, long *r, long *g, long *b)
+   {
+   ctentry *e = ct_find(pix);
+   unsigned int xr, xg, xb;
+   double gamma = w->context->gamma;
+
+   if (e) {
+      xr = e->r; xg = e->g; xb = e->b;
+      }
+   else {
+      xr = ((pix >> 16) & 255) * 257;
+      xg = ((pix >> 8) & 255) * 257;
+      xb = (pix & 255) * 257;
+      }
+   *r = 65535 * pow((int)xr / 65535.0, gamma);
+   *g = 65535 * pow((int)xg / 65535.0, gamma);
+   *b = 65535 * pow((int)xb / 65535.0, gamma);
+   }
+
+/*
+ * sdl_gamma() - the default gamma correction. The X backend does not use
+ * GammaCorrection (2.5) as is: alc_display() asks Xlib for the device
+ * value of "RGBi:.5/.5/.5" and derives the gamma from it. On a display
+ * without colour calibration (the usual case, and the reference setup)
+ * Xlib answers 49408,47872,47872, so X's effective default is
+ * 2.27630272. Computing it the same way gives the identical double.
+ */
+static double sdl_gamma(void)
+   {
+   double g = .299 * 49408 + .587 * 47872 + .114 * 47872;
+   g /= 65535;
+   return log(0.5) / log(g);
+   }
+
+/* ---------- fonts ---------- */
+
+static wfp sdl_fonts = NULL;		/* all fonts opened, by name */
+
+/*
+ * alc_font() - find or open the font named by Icon font spec *s.
+ * Icon's portable families map to macOS fonts; "fixed" (X's default
+ * font) is a small monospaced face; other names go to the platform's
+ * font lookup as they are.
+ */
+wfp alc_font(wbp w, char **s)
+   {
+   char family[MAXFONTWORD+1];
+   char *fam;
+   int flags, size;
+   wfp f;
+   void *face;
+
+   for (f = sdl_fonts; f; f = f->next)
+      if (!strcmp(f->name, *s))
+	 return f;
+
+   if (!strcmp(*s, "fixed")) {
+      fam = "Menlo";
+      flags = 0;
+      size = 11;
+      }
+   else {
+      if (!parsefont(*s, family, &flags, &size))
+	 return NULL;
+      if (size <= 0)
+	 size = DEFAULTFONTSIZE;
+      if (!strcmp(family, "mono")) fam = "Menlo";
+      else if (!strcmp(family, "typewriter")) fam = "Courier";
+      else if (!strcmp(family, "sans")) fam = "Helvetica";
+      else if (!strcmp(family, "serif")) fam = "Times";
+      else if (!strcmp(family, "fixed")) fam = "Menlo";
+      else fam = family;
+      }
+   face = ft_open(fam, (flags & (FONTFLAG_BOLD | FONTFLAG_DEMI)) != 0,
+		  (flags & (FONTFLAG_ITALIC | FONTFLAG_OBLIQUE)) != 0, size);
+   if (face == NULL)
+      return NULL;
+
+   GRFX_ALLOC(f, _wfont);
+   f->name = salloc(*s);
+   f->face = face;
+   ft_metrics(face, &f->ascent, &f->descent, &f->fwidth);
+   f->height = f->ascent + f->descent;
+   f->refcount = 1;			/* fonts stay open */
+   f->next = sdl_fonts;
+   sdl_fonts = f;
+   /*
+    * As X's tryfont() does: loading a font (but not finding it already
+    * loaded) sets the context's leading to the font's height.
+    */
+   if (w->context)
+      w->context->leading = f->height;
+   return f;
+   }
+
+/* ---------- contexts and window states ---------- */
 
 /*
  * allocate a context
@@ -19,18 +187,20 @@ static wfont sdl_deffont = { 1, 0, NULL, NULL, "fixed", 11, 2, 13, 6, NULL };
 wcp alc_context(wbp w)
    {
    wcp wc;
+   char *fixed = "fixed";
+   wfp f;
 
+   Protect(f = alc_font(w, &fixed), return NULL);
    GRFX_ALLOC(wc, _wcontext);
    wc->serial = ++context_serial;
+   wc->gamma = sdl_gamma();
    wc->fg = 0x000000;
    strcpy(wc->fgname, "black");
    wc->bg = 0xFFFFFF;
    strcpy(wc->bgname, "white");
-   wc->font = &sdl_deffont;
-   sdl_deffont.refcount++;
-   wc->leading = sdl_deffont.height;
+   wc->font = f;
+   wc->leading = f->height;
    wc->drawop = DRAWOP_COPY;
-   wc->gamma = GammaCorrection;
    wc->clipx = wc->clipy = 0;
    wc->clipw = wc->cliph = -1;
    wc->linestyle = LS_SOLID;
@@ -59,9 +229,7 @@ wcp clone_context(wbp w)
    strcpy(rv->fgname, wc->fgname);
    rv->bg = wc->bg;
    strcpy(rv->bgname, wc->bgname);
-   rv->font->refcount--;
    rv->font = wc->font;
-   rv->font->refcount++;
    rv->leading = wc->leading;
    rv->fillstyle = wc->fillstyle;
    rv->linestyle = wc->linestyle;
@@ -69,6 +237,16 @@ wcp clone_context(wbp w)
    rv->drawop = wc->drawop;
    rv->gamma = wc->gamma;
    rv->bits = wc->bits;
+   if (wc->patternname)
+      rv->patternname = salloc(wc->patternname);
+   if (wc->pat) {
+      rv->pat = malloc(wc->patw * wc->path);
+      if (rv->pat) {
+	 memcpy(rv->pat, wc->pat, wc->patw * wc->path);
+	 rv->patw = wc->patw;
+	 rv->path = wc->path;
+	 }
+      }
    return rv;
    }
 
@@ -96,8 +274,19 @@ wsp alc_winstate()
 int free_window(wsp ws)
    {
    ws->refcount--;
-   if (ws->refcount == 0)
+   if (ws->refcount == 0) {
+      ws->bits |= 1;				/* closed */
+      sdl_unmap(ws);
+      if (ws->canvas) {
+	 cv_free(ws->canvas);
+	 ws->canvas = NULL;
+	 }
+      if (ws->initpix) {
+	 free(ws->initpix);
+	 ws->initpix = NULL;
+	 }
       GRFX_UNLINK(ws, wstates);
+      }
    return 0;
    }
 
@@ -107,6 +296,9 @@ int free_window(wsp ws)
 void free_context(wcp wc)
    {
    wc->refcount--;
-   if (wc->refcount == 0)
+   if (wc->refcount == 0) {
+      if (wc->pat)
+	 free(wc->pat);
       GRFX_UNLINK(wc, wcntxts);
+      }
    }

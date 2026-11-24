@@ -1,0 +1,10 @@
+# Accepted differences between the SDL backend and the X11 reference,
+# per test: the maximum number of differing image pixels (-1: any), and
+# whether standard output may differ. Anything not listed must match
+# exactly. See sdl/design.md, "Comparing with the X11 reference".
+#
+# name      pixels  output
+clipcopy    30      same     # thin arc outline: X's arc algorithm
+lines       10      same     # corner pixels of even-width line caps
+shapes      60      same     # edge pixels of circles and slanted outlines
+text        -1      differs  # different fonts: glyphs and metrics

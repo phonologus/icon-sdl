@@ -3,18 +3,192 @@
  * (icon-sdl fork; MIT licence, see LICENSE.md).
  *
  * This file implements the interface rwindow.r and fwindow.r expect of a
- * window system (see the "graphics implementation routines" in
- * rproto.h). It is processed by rtt, so it uses only plain C; everything
- * that touches SDL or Blend2D is in src/sdl behind sdlgfx.h.
+ * window system (the "graphics implementation routines" in rproto.h),
+ * following rxwin.ri function by function. It is processed by rtt, so it
+ * uses only plain C; everything that touches SDL or Blend2D is in src/sdl
+ * behind ../sdl/sdlgfx.h.
  *
- * STATUS: skeleton. The configuration builds and links against SDL3 and
- * Blend2D, but no window can be opened yet: wopen() fails, so none of
- * the other routines can be reached. They are placeholders, to be
- * replaced as the canvas and platform layers are ported from the
- * prototype (see sdl/design.md).
+ * Each window state owns a canvas (the pixels, the equivalent of X's
+ * backing pixmap). Drawing goes to the canvas; a visible window shows it.
+ *
+ * STATUS: hidden canvases (canvas=hidden) are complete. Visible windows,
+ * events and the platform layer are not yet ported: opening a visible
+ * window fails.
  */
 
 #include "../sdl/sdlgfx.h"
+
+/*
+ * Tables the generic code and WAttrib use.
+ */
+stringint drawops[] = {
+   { 0, 16},
+   {"and",		DRAWOP_AND},
+   {"andInverted",	DRAWOP_ANDINVERTED},
+   {"andReverse",	DRAWOP_ANDREVERSE},
+   {"clear",		DRAWOP_CLEAR},
+   {"copy",		DRAWOP_COPY},
+   {"copyInverted",	DRAWOP_COPYINVERTED},
+   {"equiv",		DRAWOP_EQUIV},
+   {"invert",		DRAWOP_INVERT},
+   {"nand",		DRAWOP_NAND},
+   {"noop",		DRAWOP_NOOP},
+   {"nor",		DRAWOP_NOR},
+   {"or",		DRAWOP_OR},
+   {"orInverted",	DRAWOP_ORINVERTED},
+   {"orReverse",	DRAWOP_ORREVERSE},
+   {"set",		DRAWOP_SET},
+   {"xor",		DRAWOP_XOR},
+};
+
+/*
+ * Named fill patterns (the same bits and names as rxwin.ri).
+ */
+static int patbits[] = {
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFE,0xFF,0xEF,0xFF,0xFE,0xFF,0xEF,0xFF,
+  0x77,0xDD,0x77,0xDD,0x77,0xDD,0x77,0xDD,
+  0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,
+  0x11,0x44,0x11,0x44,0x11,0x44,0x11,0x44,
+  0x01,0x00,0x10,0x00,0x01,0x00,0x10,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+
+  0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,
+  0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01,
+  0x00,0x00,0x00,0xFF,0x00,0x00,0x00,0x00,
+  0x10,0x10,0x10,0xFF,0x10,0x10,0x10,0x10,
+  0x82,0x44,0x28,0x10,0x28,0x44,0x82,0x01,
+
+  0x0F,0x0F,0x0F,0x0F,0xF0,0xF0,0xF0,0xF0,
+  0x1B,0x18,0x81,0xB1,0x36,0x06,0x60,0x63,
+  0x02,0x02,0x05,0xF8,0x20,0x20,0x50,0x8F,
+  0x03,0x84,0x48,0x30,0x03,0x84,0x48,0x30,
+};
+
+static stringint siPatternSyms[] = {
+  {0,		16},
+  { "black",	 0},
+  { "checkers",	 12},
+  { "darkgray",	 2},
+  { "diagonal",	 8},
+  { "grains",	 13},
+  { "gray",	 3},
+  { "grid",	 10},
+  { "horizontal",9},
+  { "lightgray", 4},
+  { "scales",	 14},
+  { "trellis",	 11},
+  { "vertical",	 7},
+  { "verydark",	 1},
+  { "verylight", 5},
+  { "waves",	 15},
+  { "white",	 6},
+};
+
+/*
+ * ---------------------------------------------------------------------
+ * Helpers
+ * ---------------------------------------------------------------------
+ */
+
+/* The canvas of w, or NULL if the window is not yet mapped. */
+#define CANVAS(w) ((w)->window->canvas)
+
+/* Fill in the per-call graphics state from w's context. */
+static void mkgc(wbp w, sdlgc *g)
+   {
+   wcp wc = w->context;
+   g->fg = wc->fg;
+   g->bg = wc->bg;
+   g->drawop = wc->drawop;
+   g->reverse = ISXORREVERSE(w) != 0;
+   g->linewidth = wc->linewidth;
+   g->linestyle = wc->linestyle;
+   g->fillstyle = wc->fillstyle;
+   g->patw = wc->patw;
+   g->path = wc->path;
+   g->pat = wc->pat;
+   g->clipx = wc->clipx;
+   g->clipy = wc->clipy;
+   g->clipw = wc->clipw;
+   g->cliph = wc->cliph;
+   }
+
+/*
+ * sdl_unmap() - release a window state's window (not its canvas).
+ * Nothing to do until visible windows exist.
+ */
+void sdl_unmap(wsp ws)
+   {
+   ws->win = NULL;
+   }
+
+/*
+ * wmap() - make the canvas (and, eventually, the window) for w.
+ */
+static int wmap(wbp w)
+   {
+   wsp ws = w->window;
+   wcp wc = w->context;
+   sdlgc g;
+   int r;
+   struct imgdata *imd;
+
+   if (ws->iconic != HiddenState)
+      return Failed;			/* visible windows: not yet */
+
+   if (ws->canvas == NULL) {
+      ws->canvas = cv_new(ws->width, ws->height, 1, wc->bg);
+      if (ws->canvas == NULL)
+	 return Failed;
+      ws->pixwidth = ws->width;
+      ws->pixheight = ws->height;
+      }
+
+   /* an initial image= from a file src/sdl could read */
+   if (ws->initpix) {
+      unsigned char *opaque = malloc(ws->initw * ws->inith);
+      int i;
+      if (opaque) {
+	 for (i = 0; i < ws->initw * ws->inith; i++)
+	    opaque[i] = (ws->initpix[i] >> 24) >= 128;
+	 mkgc(w, &g);
+	 g.clipw = -1;
+	 cv_write(ws->canvas, &g, 0, 0, ws->initw, ws->inith, ws->initpix, opaque);
+	 free(opaque);
+	 }
+      free(ws->initpix);
+      ws->initpix = NULL;
+      }
+
+   /* an initial image= from a GIF file (read by the generic code) */
+   imd = &ws->initimage;
+   if (imd->width) {
+      r = strimage(w, 0, 0, imd->width, imd->height, imd->paltbl,
+	 imd->data, (word)imd->width * (word)imd->height, 0);
+      free((pointer)imd->paltbl);
+      free((pointer)imd->data);
+      imd->width = 0;
+      if (r < 0)
+	 return Failed;
+      }
+   imd = &ws->initicon;
+   if (imd->width) {
+      free((pointer)imd->paltbl);
+      free((pointer)imd->data);
+      imd->width = 0;
+      }
+   if (wc->patternname != NULL)
+      if (SetPattern(w, wc->patternname, strlen(wc->patternname)) != Succeeded)
+	 return Failed;
+   return Succeeded;
+   }
+
+/*
+ * ---------------------------------------------------------------------
+ * Opening, closing, events
+ * ---------------------------------------------------------------------
+ */
 
 /*
  * pollevent() is called by the interpreter every few hundred
@@ -28,129 +202,985 @@ int pollevent()
    }
 
 /*
- * wopen() - open a window. Not yet implemented: fail, after checking that
- * SDL3 and Blend2D are linked and working.
+ * wopen() - open a window (as in rxwin.ri, without a display).
  */
 FILE *wopen(char *name, struct b_list *lp, dptr attr, int n, int *err_index)
    {
-   *err_index = -1;			/* plain failure, not an error */
-   if (sdlgfx_probe() == 0)
+   wbp w;
+   wsp ws;
+   char answer[128];
+   int i;
+   tended struct b_list *tlp;
+   tended struct descrip attrrslt;
+
+   tlp = lp;
+   if ((w = alc_wbinding()) == NULL) {
+      *err_index = -2;
       return NULL;
-   return NULL;
+      }
+   if ((w->window = alc_winstate()) == NULL) {
+      *err_index = -2;
+      free_binding(w);
+      return NULL;
+      }
+   ws = w->window;
+   ws->listp.dword = D_List;
+   BlkLoc(ws->listp) = (union block *)tlp;
+
+   if ((w->context = alc_context(w)) == NULL) {
+      *err_index = -2;
+      free_binding(w);
+      return NULL;
+      }
+
+   /*
+    * some attributes of the context determine window defaults
+    */
+   ws->height = FHEIGHT(w) * 12;
+   ws->width  = FWIDTH(w) * 80;
+   ws->y = ASCENT(w);
+   ws->x = 0;
+   ws->y += w->context->dy;
+   ws->x += w->context->dx;
+
+   for (i = 0; i < n; i++) {
+      switch (wattrib((wbp) w, StrLoc(attr[i]), StrLen(attr[i]), &attrrslt,
+		      answer)) {
+      case Error:
+	 *err_index = i;
+	 return NULL;
+      case Failed:
+	 free_binding((wbp)w);
+	 *err_index = -1;
+	 return NULL;
+	 }
+      }
+   if (ws->windowlabel == NULL) {
+      ws->windowlabel = salloc(name);
+      if (ws->windowlabel == NULL) {
+	 *err_index = -2;
+	 return NULL;
+	 }
+      }
+
+   if ((i = wmap(w)) != Succeeded) {
+      free_binding((wbp)w);
+      if (i == Failed) *err_index = -1;
+      else *err_index = 0;
+      return NULL;
+      }
+   return (FILE *)w;
+   }
+
+/*
+ * wclose() - close a window: the window disappears; the canvas goes
+ * when its last reference does.
+ */
+int wclose(wbp w)
+   {
+   wsp ws = w->window;
+   if (ws->win && ws->refcount > 1) {
+      sdl_unmap(ws);
+      ws->refcount--;
+      }
+   else
+      free_window(ws);
+   return 0;
+   }
+
+void wflush(wbp w) { }
+void wsync(wbp w) { }
+
+/*
+ * wgetq() - get the next event for w. A hidden canvas never receives
+ * one: report the window as closed rather than waiting forever.
+ */
+int wgetq(wbp w, dptr res)
+   {
+   if (!EVQUEEMPTY(w)) {
+      EVQUEGET(w, *res);
+      return 1;
+      }
+   return -1;
    }
 
 /*
  * ---------------------------------------------------------------------
- * Placeholders: unreachable until wopen() can succeed.
+ * Drawing
  * ---------------------------------------------------------------------
  */
 
-int wclose(wbp w) { return 0; }
-void wflush(wbp w) { }
-void wsync(wbp w) { }
-int wgetq(wbp w, dptr res) { return -1; }
-int wputc(int ci, wbp w) { return 0; }
-void xdis(wbp w, char *s, int n) { }
-int do_config(wbp w, int status) { return Failed; }
-int rebind(wbp w, wbp w2) { return Failed; }
+void drawpoints(wbp w, XPoint *points, int npoints)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_points(CANVAS(w), &g, (int *)points, npoints);
+   }
 
-/* drawing primitives */
-void drawarcs(wbp w, XArc *arcs, int narcs) { }
-void drawlines(wbp w, XPoint *points, int npoints) { }
-void drawpoints(wbp w, XPoint *points, int npoints) { }
-void drawrectangles(wbp w, XRectangle *recs, int nrecs) { }
-void drawsegments(wbp w, XSegment *segs, int nsegs) { }
-void drawstrng(wbp w, int x, int y, char *s, int slen) { }
-void fillarcs(wbp w, XArc *arcs, int narcs) { }
-void fillpolygon(wbp w, XPoint *pts, int npts) { }
-void fillrectangles(wbp w, XRectangle *recs, int nrecs) { }
-void eraseArea(wbp w, int x, int y, int width, int height) { }
-int copyArea(wbp w, wbp w2, int x, int y, int wd, int h, int x2, int y2)
-   { return Failed; }
+void drawlines(wbp w, XPoint *points, int npoints)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_lines(CANVAS(w), &g, (int *)points, npoints);
+   }
+
+void drawsegments(wbp w, XSegment *segs, int nsegs)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_segments(CANVAS(w), &g, (int *)segs, nsegs);
+   }
+
+void drawrectangles(wbp w, XRectangle *recs, int nrecs)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_rects(CANVAS(w), &g, (int *)recs, nrecs);
+   }
+
+void fillrectangles(wbp w, XRectangle *recs, int nrecs)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_fillrects(CANVAS(w), &g, (int *)recs, nrecs);
+   }
+
+static void do_arcs(wbp w, XArc *arcs, int narcs, int fill)
+   {
+   sdlgc g;
+   int *r, i;
+   double *a;
+   if (!CANVAS(w) || narcs <= 0) return;
+   r = malloc(narcs * 4 * sizeof(int));
+   a = malloc(narcs * 2 * sizeof(double));
+   if (r && a) {
+      for (i = 0; i < narcs; i++) {
+	 r[4*i] = arcs[i].x;
+	 r[4*i+1] = arcs[i].y;
+	 r[4*i+2] = arcs[i].width;
+	 r[4*i+3] = arcs[i].height;
+	 a[2*i] = arcs[i].angle1;
+	 a[2*i+1] = arcs[i].angle2;
+	 }
+      mkgc(w, &g);
+      cv_arcs(CANVAS(w), &g, r, a, narcs, fill);
+      }
+   free(r);
+   free(a);
+   }
+
+void drawarcs(wbp w, XArc *a, int n) { do_arcs(w, a, n, 0); }
+void fillarcs(wbp w, XArc *a, int n) { do_arcs(w, a, n, 1); }
+
+void fillpolygon(wbp w, XPoint *pts, int npts)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_fillpoly(CANVAS(w), &g, (int *)pts, npts);
+   }
+
+/*
+ * eraseArea() - fill with the background colour. As in rxwin.ri, an
+ * area reaching the window's edge extends over the whole canvas.
+ */
+void eraseArea(wbp w, int x, int y, int width, int height)
+   {
+   wsp ws = w->window;
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   if (x + width >= (int)ws->width)  width  = ws->pixwidth - x;
+   if (y + height >= (int)ws->height) height = ws->pixheight - y;
+   mkgc(w, &g);
+   cv_erase(CANVAS(w), &g, x, y, width, height);
+   }
+
+/*
+ * copyArea() - copy from w's canvas to w2's, with w2's drawop and clip.
+ */
+int copyArea(wbp w, wbp w2, int x, int y, int width, int height, int x2, int y2)
+   {
+   sdlgc g;
+   if (!CANVAS(w) || !CANVAS(w2)) return Failed;
+   mkgc(w2, &g);
+   cv_copy(CANVAS(w), CANVAS(w2), &g, x, y, width, height, x2, y2);
+   return Succeeded;
+   }
+
+/* Clipping is read from the context on every call. */
 void setclip(wbp w) { }
 void unsetclip(wbp w) { }
 
-/* text */
-int textWidth(wbp w, char *s, int n) { return n * FWIDTH(w); }
-int setfont(wbp w, char **s) { return Failed; }
+/*
+ * ---------------------------------------------------------------------
+ * Text
+ * ---------------------------------------------------------------------
+ */
+
+int textWidth(wbp w, char *s, int n)
+   {
+   return ft_width(w->context->font->face, s, n);
+   }
+
+void drawstrng(wbp w, int x, int y, char *s, int slen)
+   {
+   sdlgc g;
+   if (!CANVAS(w)) return;
+   mkgc(w, &g);
+   cv_text(CANVAS(w), &g, w->context->font->face, x, y, s, slen, 0);
+   }
+
+/*
+ * xdis() - draw text at the text cursor with its background (X's
+ * XDrawImageString), and advance the cursor.
+ */
+void xdis(wbp w, char *s, int n)
+   {
+   wsp ws = w->window;
+   sdlgc g;
+
+   pollctr >>= 1; pollctr++;
+   if (CANVAS(w)) {
+      mkgc(w, &g);
+      cv_text(CANVAS(w), &g, w->context->font->face, ws->x, ws->y, s, n, 1);
+      }
+   ws->x += textWidth(w, s, n);
+   }
+
+/*
+ * wputc() - write a character to a window (as rxwin.ri: newline,
+ * scrolling, tabs, and cooked-mode backspace).
+ */
+int wputc(int ci, wbp w)
+   {
+   wsp ws = w->window;
+   wcp wc = w->context;
+   int lh, width, height, over;
+   char c = (char)ci;
+   sdlgc g;
+
+   lh = wc->leading;
+   width = ws->width;
+   height = ws->height;
+
+   switch (c) {
+   case '\r':
+      ws->x = wc->dx;
+      break;
+   case '\n':
+      if (ISCEOLON(w) && CANVAS(w)) {	/* clear to end of line */
+	 mkgc(w, &g);
+	 g.clipw = -1;
+	 cv_erase(CANVAS(w), &g, ws->x, ws->y - ASCENT(w), width - ws->x, lh);
+	 }
+      ws->y += lh;
+      ws->x = wc->dx;
+      over = ws->y + DESCENT(w) - height;
+      if (over > 0) {			/* scroll */
+	 ws->y -= over;
+	 if (CANVAS(w)) {
+	    mkgc(w, &g);
+	    g.drawop = DRAWOP_COPY;
+	    g.reverse = 0;
+	    g.clipw = -1;
+	    cv_copy(CANVAS(w), CANVAS(w), &g, 0, over, width, height - over, 0, 0);
+	    cv_erase(CANVAS(w), &g, 0, height - over, width, over);
+	    }
+	 }
+      break;
+   case '\t':
+      xdis(w, "        ", 8 - ((XTOCOL(w, ws->x)) & 7));
+      break;
+   case '\177':
+   case '\010': {
+      int i = 0, pre_x;
+      i--;
+      while ((i > -EQUEUELEN) && (EVQUESUB(w, i) != c)) i--;
+      if (i == -EQUEUELEN) break;
+      i--;
+      while ((i > -EQUEUELEN) && !isprint(EVQUESUB(w, i))) i--;
+      if (i == -EQUEUELEN) break;
+      c = EVQUESUB(w, i);
+      pre_x = ws->x;
+      ws->x -= textWidth(w, &c, 1);
+      *evquesub(w, i) = '\010';
+      i = ws->x;
+      while (ws->x < pre_x) xdis(w, " ", 1);
+      ws->x = i;
+      break;
+      }
+   default:
+      xdis(w, &c, 1);
+   }
+   return 1;
+   }
+
+int setfont(wbp w, char **s)
+   {
+   wfp f;
+   Protect(f = alc_font(w, s), return Failed);
+   w->context->font = f;
+   if (!CANVAS(w)) {
+      w->window->y = ASCENT(w);
+      w->window->x = 0;
+      }
+   return Succeeded;
+   }
+
 void getfntnam(wbp w, char *answer) { strcpy(answer, w->context->font->name); }
 int setleading(wbp w, int i) { w->context->leading = i; return Succeeded; }
-int setcursor(wbp w, int on) { return Succeeded; }
 
-/* colours and graphics context */
-int setfg(wbp w, char *s) { return Failed; }
-int setbg(wbp w, char *s) { return Failed; }
-int isetfg(wbp w, int fg) { return Failed; }
-int isetbg(wbp w, int bg) { return Failed; }
+/* The text cursor (WAttrib("cursor=on")): not yet drawn. */
+int setcursor(wbp w, int on)
+   {
+   if (on) SETCURSORON(w);
+   else CLRCURSORON(w);
+   return Succeeded;
+   }
+
+/*
+ * ---------------------------------------------------------------------
+ * Colours and the graphics context
+ * ---------------------------------------------------------------------
+ */
+
+static void colorname(char *dst, char *s)
+   {
+   strncpy(dst, s, 6 + MAXCOLORNAME - 1);
+   dst[6 + MAXCOLORNAME - 1] = '\0';
+   }
+
+int setfg(wbp w, char *s)
+   {
+   long r, g, b;
+   if (parsecolor(w, s, &r, &g, &b) != Succeeded)
+      return Failed;
+   w->context->fg = sdl_rgb(w, r, g, b);
+   colorname(w->context->fgname, s);
+   return Succeeded;
+   }
+
+int setbg(wbp w, char *s)
+   {
+   long r, g, b;
+   if (parsecolor(w, s, &r, &g, &b) != Succeeded)
+      return Failed;
+   w->context->bg = sdl_rgb(w, r, g, b);
+   colorname(w->context->bgname, s);
+   return Succeeded;
+   }
+
+/* Set fg or bg from a pixel value 0xRRGGBB (or a mutable colour, < 0). */
+static int isetcolor(wbp w, int c, int fg)
+   {
+   char s[MaxCvtLen];
+   if (c < 0)
+      return Failed;			/* no mutable colours */
+   sprintf(s, "%d,%d,%d", ((c >> 16) & 255) * 257, ((c >> 8) & 255) * 257,
+      (c & 255) * 257);
+   return fg ? setfg(w, s) : setbg(w, s);
+   }
+
+int isetfg(wbp w, int fg) { return isetcolor(w, fg, 1); }
+int isetbg(wbp w, int bg) { return isetcolor(w, bg, 0); }
+
 void getfg(wbp w, char *answer) { strcpy(answer, w->context->fgname); }
 void getbg(wbp w, char *answer) { strcpy(answer, w->context->bgname); }
-void toggle_fgbg(wbp w) { }
-int setgamma(wbp w, double gamma) { w->context->gamma = gamma; return Succeeded; }
+
+void toggle_fgbg(wbp w)
+   {
+   wcp wc = w->context;
+   unsigned long t = wc->fg;
+   char tn[6 + MAXCOLORNAME];
+   wc->fg = wc->bg;
+   wc->bg = t;
+   strcpy(tn, wc->fgname);
+   strcpy(wc->fgname, wc->bgname);
+   strcpy(wc->bgname, tn);
+   }
+
+int setgamma(wbp w, double gamma)
+   {
+   char fg[6 + MAXCOLORNAME], bg[6 + MAXCOLORNAME];
+   w->context->gamma = gamma;
+   strcpy(fg, w->context->fgname);		/* reinterpret fg and bg */
+   strcpy(bg, w->context->bgname);
+   setfg(w, fg);
+   setbg(w, bg);
+   return Succeeded;
+   }
+
+/* X colour names (rgb.txt) beyond Icon's own: not yet supported. */
 int nativecolor(wbp w, char *s, long *r, long *g, long *b) { return 0; }
+
 void freecolor(wbp w, char *s) { }
+
+/* Mutable colours are not supported (sdl/design.md, decision 1). */
 int mutable_color(wbp w, dptr argv, int ac, int *retval) { return Failed; }
 int set_mutable(wbp w, int i, char *s) { return Failed; }
 char *get_mutable_name(wbp w, int mute_index) { return NULL; }
 void free_mutable(wbp w, int mute_index) { }
-int setdrawop(wbp w, char *val) { return Failed; }
-void getdrawop(wbp w, char *answer) { strcpy(answer, "copy"); }
-int setlinestyle(wbp w, char *s) { return Failed; }
-void getlinestyle(wbp w, char *answer) { strcpy(answer, "solid"); }
-int setlinewidth(wbp w, LONG linewid) { return Failed; }
-int setfillstyle(wbp w, char *s) { return Failed; }
-int SetPattern(wbp w, char *name, int len) { return Failed; }
-int SetPatternBits(wbp w, int width, C_integer *bits, int nbits) { return Failed; }
 
-/* images and pixels */
+int setdrawop(wbp w, char *val)
+   {
+   wcp wc = w->context;
+   int op;
+   if (!strcmp(val, "reverse")) {
+      SETXORREVERSE(w);
+      wc->drawop = DRAWOP_XOR;
+      return Succeeded;
+      }
+   op = si_s2i(drawops, val);
+   if (op == -1)
+      return Error;
+   CLRXORREVERSE(w);
+   wc->drawop = op;
+   return Succeeded;
+   }
+
+void getdrawop(wbp w, char *answer)
+   {
+   char *s;
+   if (ISXORREVERSE(w))
+      s = "reverse";
+   else
+      s = si_i2s(drawops, w->context->drawop);
+   strcpy(answer, s ? s : "copy");
+   }
+
+int setlinestyle(wbp w, char *s)
+   {
+   wcp wc = w->context;
+   if (!strcmp(s, "solid"))
+      wc->linestyle = LS_SOLID;
+   else if (!strcmp(s, "onoff") || !strcmp(s, "dashed"))
+      wc->linestyle = LS_DASHED;
+   else if (!strcmp(s, "doubledash") || !strcmp(s, "striped"))
+      wc->linestyle = LS_STRIPED;
+   else
+      return Error;
+   return Succeeded;
+   }
+
+void getlinestyle(wbp w, char *answer)
+   {
+   wcp wc = w->context;
+   strcpy(answer, wc->linestyle == LS_SOLID ? "solid" :
+      (wc->linestyle == LS_DASHED ? "dashed" : "striped"));
+   }
+
+int setlinewidth(wbp w, LONG linewid)
+   {
+   if (linewid > 32767)
+      return Failed;
+   w->context->linewidth = linewid;
+   return Succeeded;
+   }
+
+int setfillstyle(wbp w, char *s)
+   {
+   wcp wc = w->context;
+   if (!strcmp(s, "solid"))
+      wc->fillstyle = FS_SOLID;
+   else if (!strcmp(s, "masked") || !strcmp(s, "stippled")
+	    || !strcmp(s, "patterned"))
+      wc->fillstyle = FS_STIPPLE;
+   else if (!strcmp(s, "textured") || !strcmp(s, "opaquestippled")
+	    || !strcmp(s, "opaquepatterned"))
+      wc->fillstyle = FS_OPAQUESTIPPLE;
+   else
+      return Error;
+   return Succeeded;
+   }
+
+/*
+ * SetPatternBits() - set the fill pattern: nbits rows of width bits,
+ * bit x of row y (least significant first) setting pixel x, as X's
+ * XCreateBitmapFromData reads them.
+ */
+int SetPatternBits(wbp w, int width, C_integer *bits, int nbits)
+   {
+   wcp wc = w->context;
+   unsigned char *p;
+   int x, y;
+
+   if (width <= 0 || nbits <= 0)
+      return Failed;
+   p = malloc(width * nbits);
+   if (p == NULL)
+      ReturnErrNum(305, Error);
+   for (y = 0; y < nbits; y++)
+      for (x = 0; x < width; x++)
+	 p[y * width + x] = (x < (int)(8 * sizeof(C_integer)))
+	    ? (bits[y] >> x) & 1 : 0;
+   if (wc->pat)
+      free(wc->pat);
+   wc->pat = p;
+   wc->patw = width;
+   wc->path = nbits;
+   return Succeeded;
+   }
+
+int SetPattern(wbp w, char *name, int len)
+   {
+   wcp wc = w->context;
+   int width, nbits, i, symbol;
+   C_integer bits[MAXXOBJS];
+
+   if (wc->patternname != NULL)
+      free(wc->patternname);
+   wc->patternname = malloc(len + 1);
+   if (wc->patternname == NULL)
+      ReturnErrNum(305, Error);
+   strncpy(wc->patternname, name, len);
+   wc->patternname[len] = '\0';
+
+   if (len > 0 && isdigit(name[0])) {	/* width,bits encoding */
+      nbits = MAXXOBJS;
+      switch (parsepattern(name, len, &width, &nbits, bits)) {
+      case Failed:
+	 return Failed;
+      case Error:
+	 ReturnErrNum(145, Error);
+	 }
+      return SetPatternBits(w, width, bits, nbits);
+      }
+
+   if ((symbol = si_s2i(siPatternSyms, wc->patternname)) >= 0) {
+      for (i = 0; i < 8; i++)
+	 bits[i] = patbits[symbol * 8 + i];
+      return SetPatternBits(w, 8, bits, 8);
+      }
+   return Failed;
+   }
+
+int rebind(wbp w, wbp w2)
+   {
+   w->context = w2->context;
+   return Succeeded;
+   }
+
+/*
+ * ---------------------------------------------------------------------
+ * Images and pixels
+ * ---------------------------------------------------------------------
+ */
+
+/*
+ * strimage() - draw a character-per-pixel image (DrawImage, GIF files).
+ * Returns the number of colours that could not be allocated (always 0),
+ * or -1 on error.
+ */
 int strimage(wbp w, int x, int y, int width, int height,
    struct palentry *e, unsigned char *s, word len, int on_icon)
-   { return -1; }
-int blimage(wbp w, int x, int y, int wd, int h,
+   {
+   unsigned int pix[256], *px;
+   unsigned char *op;
+   int c, v, ix, iy, n = width * height;
+   sdlgc g;
+
+   if (on_icon || !CANVAS(w))
+      return 0;
+   if (n <= 0)
+      return 0;
+   for (c = 0; c < 256; c++)
+      if (e[c].used && e[c].valid)
+	 pix[c] = sdl_rgb(w, e[c].clr.red, e[c].clr.green, e[c].clr.blue);
+   px = calloc(n, sizeof(unsigned int));
+   op = calloc(n, 1);
+   if (!px || !op) {
+      free(px);
+      free(op);
+      return -1;
+      }
+   ix = iy = 0;
+   while (len-- && iy < height) {
+      c = *s++;
+      v = e[c].valid;
+      if (v) {
+	 px[iy * width + ix] = pix[c];
+	 op[iy * width + ix] = 1;
+	 }
+      if (v || e[c].transpt) {
+	 if (++ix >= width) {
+	    ix = 0;
+	    iy++;
+	    }
+	 }
+      }
+   if (ix > 0)				/* pad final row with bg */
+      while (ix < width) {
+	 px[iy * width + ix] = w->context->bg;
+	 op[iy * width + ix++] = 1;
+	 }
+   mkgc(w, &g);
+   cv_write(CANVAS(w), &g, x, y, width, height, px, op);
+   free(px);
+   free(op);
+   return 0;
+   }
+
+/*
+ * blimage() - draw a bilevel image ("width,#hex" or "width,~hex").
+ * The hex digits fill each row right to left, as in rxwin.ri.
+ */
+int blimage(wbp w, int x, int y, int width, int height,
    int ch, unsigned char *s, word len)
-   { return Failed; }
+   {
+   unsigned int m, msk1, c, ix, iy, *px, fg, bg;
+   unsigned char *op;
+   int n = width * height;
+   sdlgc g;
+
+   if (!CANVAS(w) || n <= 0)
+      return Succeeded;
+   px = calloc(n, sizeof(unsigned int));
+   op = calloc(n, 1);
+   if (!px || !op) {
+      free(px);
+      free(op);
+      return Error;
+      }
+   m = width % 4;
+   msk1 = (m == 0) ? 8 : 1 << (m - 1);
+   fg = w->context->fg;
+   bg = w->context->bg;
+   ix = width;
+   iy = 0;
+   m = msk1;
+   while (len-- && iy < (unsigned)height) {
+      if (isxdigit(c = *s++)) {
+	 if (!isdigit(c))
+	    c += 9;
+	 while (m > 0) {
+	    --ix;
+	    if (c & m) {
+	       px[iy * width + ix] = fg;
+	       op[iy * width + ix] = 1;
+	       }
+	    else if (ch != TCH1) {
+	       px[iy * width + ix] = bg;
+	       op[iy * width + ix] = 1;
+	       }
+	    m >>= 1;
+	    }
+	 if (ix == 0) {
+	    ix = width;
+	    iy++;
+	    m = msk1;
+	    }
+	 else
+	    m = 8;
+	 }
+      }
+   if (ix > 0 && ix < (unsigned)width && iy < (unsigned)height)
+      while (ix < (unsigned)width) {	/* pad final row */
+	 px[iy * width + ix] = bg;
+	 op[iy * width + ix++] = 1;
+	 }
+   mkgc(w, &g);
+   cv_write(CANVAS(w), &g, x, y, width, height, px, op);
+   free(px);
+   free(op);
+   return Succeeded;
+   }
+
+/*
+ * capture() - the region as 15-bit linear colour, for writeGIF, mapping
+ * each 8-bit channel through gamma exactly as rxwin.ri does.
+ */
 int capture(wbp w, int x, int y, int width, int height, short *data)
-   { return 0; }
-int getpixel_init(wbp w, struct imgmem *imem) { return Failed; }
-int getpixel_term(wbp w, struct imgmem *imem) { return Succeeded; }
+   {
+   unsigned char cmap[256];
+   unsigned int *px, p;
+   double gamma = w->context->gamma;
+   int i, n = width * height;
+
+   if (!CANVAS(w))
+      return 0;
+   px = malloc(n * sizeof(unsigned int));
+   if (!px)
+      return 0;
+   cv_read(CANVAS(w), x, y, width, height, w->context->bg, px);
+   for (i = 0; i < 256; i++)
+      cmap[i] = 31 * pow(i / 255., gamma) + 0.5;
+   for (i = 0; i < n; i++) {
+      p = px[i];
+      *data++ = (cmap[(p >> 16) & 0xFF] << 10) | (cmap[(p >> 8) & 0xFF] << 5)
+	 | cmap[p & 0xFF];
+      }
+   free(px);
+   return 1;
+   }
+
+int getpixel_init(wbp w, struct imgmem *imem)
+   {
+   imem->pix = NULL;
+   if (imem->width <= 0 || imem->height <= 0 || !CANVAS(w))
+      return Succeeded;
+   imem->pix = malloc(imem->width * imem->height * sizeof(unsigned int));
+   if (imem->pix == NULL)
+      return Failed;
+   cv_read(CANVAS(w), imem->x, imem->y, imem->width, imem->height,
+      w->context->bg, imem->pix);
+   return Succeeded;
+   }
+
+int getpixel_term(wbp w, struct imgmem *imem)
+   {
+   if (imem->pix)
+      free(imem->pix);
+   imem->pix = NULL;
+   return Succeeded;
+   }
+
 int getpixel(wbp w, int x, int y, long *rv, char *s, struct imgmem *imem)
-   { return Failed; }
+   {
+   unsigned int c;
+   long r, g, b;
+
+   if (!imem->pix || x < imem->x || x >= imem->x + imem->width ||
+       y < imem->y || y >= imem->y + imem->height)
+      c = w->context->bg;
+   else
+      c = imem->pix[(y - imem->y) * imem->width + (x - imem->x)];
+   sdl_lcolor(w, c, &r, &g, &b);
+   *rv = 1;
+   sprintf(s, "%ld,%ld,%ld", r, g, b);
+   return Succeeded;
+   }
+
+/*
+ * readimage() - ReadImage() for formats src/sdl reads (PNG, JPEG, BMP,
+ * QOI; GIF is handled by the generic code first). File pixels are device
+ * colours; alpha < 50% is transparent.
+ */
 int readimage(wbp w, char *filename, int x, int y, int *status)
-   { return Failed; }
+   {
+   unsigned int *px;
+   unsigned char *op;
+   int iw, ih, i;
+   sdlgc g;
+
+   *status = 0;
+   px = cv_load(filename, &iw, &ih);
+   if (px == NULL)
+      return Failed;
+   op = malloc(iw * ih);
+   if (op == NULL) {
+      free(px);
+      return Error;
+      }
+   for (i = 0; i < iw * ih; i++)
+      op[i] = (px[i] >> 24) >= 128;
+   if (CANVAS(w)) {
+      mkgc(w, &g);
+      cv_write(CANVAS(w), &g, x, y, iw, ih, px, op);
+      }
+   free(px);
+   free(op);
+   return Succeeded;
+   }
+
+/*
+ * dumpimage() - WriteImage() for PNG, JPEG, BMP and QOI; NoCvt sends
+ * anything else (GIF) to the generic writeGIF.
+ */
 int dumpimage(wbp w, char *filename, unsigned int x, unsigned int y,
    unsigned int width, unsigned int height)
-   { return Failed; }
-int setimage(wbp w, char *val) { return Failed; }
+   {
+   int r;
+   if (!CANVAS(w))
+      return Failed;
+   r = cv_save(CANVAS(w), filename, x, y, width, height);
+   if (r < 0)
+      return NoCvt;
+   return r ? Succeeded : Failed;
+   }
 
-/* window geometry and state */
-int setgeometry(wbp w, char *geo) { return Failed; }
-int setwidth(wbp w, SHORT new_width) { return Failed; }
-int setheight(wbp w, SHORT new_height) { return Failed; }
-int allowresize(wbp w, int on) { return Succeeded; }
-int getpos(wbp w) { return Failed; }
-int setcanvas(wbp w, char *s) { return Failed; }
-void getcanvas(wbp w, char *s) { strcpy(s, "hidden"); }
-int seticonicstate(wbp w, char *s) { return Failed; }
-void geticonic(wbp w, char *answer) { strcpy(answer, "0"); }
-int seticonlabel(wbp w, char *val) { return Succeeded; }
+/*
+ * setimage() - the image= attribute for a file the generic code could
+ * not read as GIF: read it now, size the window, draw it when mapped.
+ */
+int setimage(wbp w, char *val)
+   {
+   wsp ws = w->window;
+   int iw, ih;
+   unsigned int *px = cv_load(val, &iw, &ih);
+   if (px == NULL)
+      return Failed;
+   if (ws->initpix)
+      free(ws->initpix);
+   ws->initpix = px;
+   ws->initw = iw;
+   ws->inith = ih;
+   ws->width = iw;
+   ws->height = ih;
+   return Succeeded;
+   }
+
+/*
+ * ---------------------------------------------------------------------
+ * Window geometry and state
+ * ---------------------------------------------------------------------
+ */
+
+int setwidth(wbp w, SHORT new_width)
+   {
+   if (new_width < 0) return Failed;
+   w->window->width = new_width;
+   return Succeeded;
+   }
+
+int setheight(wbp w, SHORT new_height)
+   {
+   if (new_height < 0) return Failed;
+   w->window->height = new_height;
+   return Succeeded;
+   }
+
+int setgeometry(wbp w, char *geo)
+   {
+   wsp ws = w->window;
+   SHORT width = 0, height = 0, x = 0, y = 0;
+   int status;
+
+   if ((status = parsegeometry(geo, &x, &y, &width, &height)) == 0)
+      return Error;
+   if (status & 1) {
+      ws->width = width;
+      ws->height = height;
+      }
+   if ((ws->win || !ws->canvas) && (status & 2)) {
+      ws->posx = x;
+      ws->posy = y;
+      }
+   return Succeeded;
+   }
+
+/*
+ * do_config() - apply a new size (and, for windows, position): the
+ * canvas grows as needed, never shrinks (like X's backing pixmap).
+ */
+int do_config(wbp w, int status)
+   {
+   wsp ws = w->window;
+   if (ws->canvas) {
+      cv_resize(ws->canvas, ws->width, ws->height, w->context->bg);
+      if ((int)ws->width > ws->pixwidth) ws->pixwidth = ws->width;
+      if ((int)ws->height > ws->pixheight) ws->pixheight = ws->height;
+      }
+   return Succeeded;
+   }
+
+int allowresize(wbp w, int on)
+   {
+   if (on) SETRESIZABLE(w);
+   else CLRRESIZABLE(w);
+   return Succeeded;
+   }
+
+int getpos(wbp w) { return Succeeded; }
+
+/*
+ * setcanvas() - hidden or visible. Only "hidden" is possible until the
+ * platform layer is ported, and only before the window is mapped.
+ */
+int setcanvas(wbp w, char *s)
+   {
+   wsp ws = w->window;
+   if (!strcmp(s, "hidden")) {
+      if (ws->canvas && ws->iconic != HiddenState)
+	 return Failed;
+      ws->iconic = HiddenState;
+      return Succeeded;
+      }
+   if (!strcmp(s, "normal") || !strcmp(s, "iconic") || !strcmp(s, "maximal")) {
+      if (ws->canvas)
+	 return Failed;			/* showing a hidden canvas: not yet */
+      ws->iconic = !strcmp(s, "normal") ? NormalState :
+	 (!strcmp(s, "iconic") ? IconicState : MaximizedState);
+      return Succeeded;
+      }
+   return Error;
+   }
+
+void getcanvas(wbp w, char *s)
+   {
+   switch (w->window->iconic) {
+   case HiddenState:	strcpy(s, "hidden"); break;
+   case IconicState:	strcpy(s, "iconic"); break;
+   case MaximizedState:	strcpy(s, "maximal"); break;
+   default:		strcpy(s, "normal"); break;
+   }
+   }
+
+int seticonicstate(wbp w, char *s) { return setcanvas(w, s); }
+void geticonic(wbp w, char *answer)
+   {
+   sprintf(answer, "%d", w->window->iconic == IconicState);
+   }
+int seticonlabel(wbp w, char *val)
+   {
+   if (w->window->iconlabel) free(w->window->iconlabel);
+   w->window->iconlabel = salloc(val);
+   return Succeeded;
+   }
 int seticonimage(wbp w, dptr dp) { return Failed; }
-int setwindowlabel(wbp w, char *val) { return Succeeded; }
+int setwindowlabel(wbp w, char *val)
+   {
+   if (w->window->windowlabel) free(w->window->windowlabel);
+   w->window->windowlabel = salloc(val);
+   return Succeeded;
+   }
 int seticonpos(wbp w, char *s) { return Failed; }
 int geticonpos(wbp w, char *s) { return Failed; }
 int raiseWindow(wbp w) { return Succeeded; }
 int lowerWindow(wbp w) { return Succeeded; }
 int walert(wbp w, int volume) { return Succeeded; }
 
-/* pointer */
-int setpointer(wbp w, char *val) { return Failed; }
-void getpointername(wbp w, char *answer) { strcpy(answer, "left ptr"); }
+/*
+ * ---------------------------------------------------------------------
+ * Pointer and display
+ * ---------------------------------------------------------------------
+ */
+
+int setpointer(wbp w, char *val)
+   {
+   wsp ws = w->window;
+   if (ws->cursorname) free(ws->cursorname);
+   ws->cursorname = salloc(val);
+   return Succeeded;
+   }
+
+void getpointername(wbp w, char *answer)
+   {
+   strcpy(answer, w->window->cursorname ? w->window->cursorname : "left ptr");
+   }
+
 void warpPointer(wbp w, int x, int y) { }
-int query_pointer(wbp w, XPoint *pp) { return Failed; }
+
+int query_pointer(wbp w, XPoint *pp)
+   {
+   pp->x = w->window->pointerx;
+   pp->y = w->window->pointery;
+   return Succeeded;
+   }
+
 int query_rootpointer(XPoint *pp) { return Failed; }
 
-/* display */
 int setdisplay(wbp w, char *s) { return Failed; }
 void getdisplay(wbp w, char *answer) { *answer = '\0'; }
-int getvisual(wbp w, char *answer) { return Failed; }
+int getvisual(wbp w, char *answer)
+   {
+   strcpy(answer, "4,8,256");		/* TrueColor, 8 bits, 256 entries */
+   return Succeeded;
+   }
 int getdefault(wbp w, char *prog, char *opt, char *answer) { return Failed; }
 int displayHeight(wbp w) { return 0; }
 int displayWidth(wbp w) { return 0; }

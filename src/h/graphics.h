@@ -280,8 +280,8 @@ typedef struct _wcontext {
       int	linestyle;
       int	linewidth;
       int	leading;		/* inter-line leading */
-      int	patwidth;		/* fill pattern: width, and bits */
-      C_integer	*patbits;		/*  (NULL if none) */
+      int	patw, path;		/* fill pattern size (0: none) */
+      unsigned char *pat;		/* patw * path cells, 1 = set */
    #endif				/* SDLGraphics */
 
    } wcontext, *wcp;
@@ -373,6 +373,8 @@ typedef struct _wstate {
       void	*win;			/* src/sdl window, NULL if hidden */
       void	*canvas;		/* src/sdl canvas (the pixels) */
       int	iconic;			/* NormalState, IconicState, ... */
+      unsigned int *initpix;		/* image= file read by src/sdl, */
+      int	initw, inith;		/*  drawn when the canvas is made */
    #endif				/* SDLGraphics */
 
    } wstate, *wsp;
