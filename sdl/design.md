@@ -630,6 +630,26 @@ the unstripped `src/runtime/iconx`):
   is processed over its ink width only. These are smaller gains than
   hoped: the profile showed scrolling, not shaping, to be the cost.
 
+**Presenting is asynchronous, like `XFlush`.** Every `WAttrib()` call
+ends in `wflush`. In X that is `XFlush`, which returns at once. Here it
+used to present synchronously: the interpreter waited while the main
+thread uploaded the texture and called `SDL_RenderPresent`, about 3.8 ms
+each. Sean's application makes many `WAttrib` calls per redraw, so 95% of
+each redraw (325 ms) was spent waiting. Now:
+
+- `pl_present` copies the changed rows of the canvas into a per-window
+  staging buffer (under a short lock) and posts one request.
+- The main thread uploads the pending rectangle and renders when it can.
+- Further presents before then merge into the pending rectangle.
+- Pointer-shape changes are posted without waiting too.
+
+The canvas is touched only by the interpreter thread, and the main thread
+reads only the staging buffer. A closing window's memory is freed by a
+request queued behind any pending present. The application's redraw went
+from 325 ms to about 9.5 ms (measured with 300 scripted redraws: the time
+is now the program's own work). 200 `WFlush()` or `WAttrib()` calls now
+cost nothing measurable, against 0.76 s before.
+
 **Showing windows.** A window is shown at once whenever the program
 pauses naturally: waiting in `Event()`, `Pending()` (which calls
 `wsync`), `WFlush()`, `WSync()` or `WDelay()`. `pollevent()` also shows

@@ -45,7 +45,22 @@ typedef struct Win {
    int tw, th;				/* texture size (device pixels) */
    int vw, vh;				/* shown part (device pixels) */
    struct Win *next;
+
+   /*
+    * Asynchronous presenting (guarded by pmu): the interpreter copies
+    * changed rows of the canvas into the staging buffer and posts one
+    * request; the main thread uploads the pending rectangle and renders.
+    */
+   unsigned char *st;			/* staging copy of the canvas */
+   long ststride;
+   int sw_, sh_;			/* staging size (device pixels) */
+   int pend[4];				/* pending rectangle; pend[0] < 0: none */
+   int pvw, pvh;			/* part to show, from the interpreter */
+   int posted;				/* a present request is queued */
+   int closing;
    } Win;
+
+static pthread_mutex_t pmu = PTHREAD_MUTEX_INITIALIZER;
 
 static Win *wins;			/* main thread only */
 
@@ -57,7 +72,18 @@ static void (*req_fn)(void *);		/* pending request (before SDL) */
 static void *req_arg;
 static int req_done;
 static int sdl_up;			/* SDL initialised (main thread loop) */
-static Uint32 ev_call;
+static Uint32 ev_call, ev_async;
+
+/* Post fn(arg) to the main thread without waiting (SDL must be up). */
+static void post_main(void (*fn)(void *), void *arg)
+{
+   SDL_Event e;
+   memset(&e, 0, sizeof e);
+   e.type = ev_async;
+   e.user.data1 = (void *)fn;
+   e.user.data2 = arg;
+   SDL_PushEvent(&e);
+}
 
 static void call_main(void (*fn)(void *), void *arg)
 {
@@ -264,6 +290,10 @@ static void handle(SDL_Event *se)
       finish_call();
       return;
    }
+   if (se->type == ev_async) {
+      ((void (*)(void *))se->user.data1)(se->user.data2);
+      return;
+   }
    memset(&e, 0, sizeof e);
    switch (se->type) {
    case SDL_EVENT_KEY_DOWN:
@@ -341,7 +371,8 @@ static void init_sdl(void *unused)
    (void)unused;
    SDL_SetHint(SDL_HINT_MAC_BACKGROUND_APP, "0");
    if (SDL_Init(SDL_INIT_VIDEO)) {
-      ev_call = SDL_RegisterEvents(1);
+      ev_call = SDL_RegisterEvents(2);
+      ev_async = ev_call + 1;
       sdl_up = 1;
    }
 }
@@ -486,6 +517,7 @@ static void open_cb(void *p)
    w->r = SDL_CreateRenderer(w->sw, NULL);
    if (!w->r) { SDL_DestroyWindow(w->sw); free(w); return; }
    w->id = SDL_GetWindowID(w->sw);
+   w->pend[0] = -1;
    if (o->x != INT_MIN && o->y != INT_MIN)
       SDL_SetWindowPosition(w->sw, o->x, o->y);
    d = SDL_GetWindowPixelDensity(w->sw);
@@ -516,6 +548,13 @@ void *pl_open(const char *title, int x, int y, int w, int h, int state,
    return o.win;
 }
 
+static void free_win(void *p)
+{
+   Win *w = p;
+   free(w->st);
+   free(w);
+}
+
 static void close_cb(void *p)
 {
    Win *w = p, **pp;
@@ -524,7 +563,11 @@ static void close_cb(void *p)
    if (w->tex) SDL_DestroyTexture(w->tex);
    SDL_DestroyRenderer(w->r);
    SDL_DestroyWindow(w->sw);
-   free(w);
+   pthread_mutex_lock(&pmu);
+   w->closing = 1;
+   pthread_mutex_unlock(&pmu);
+   /* a present request may still be queued behind us: free after it */
+   post_main(free_win, w);
 }
 
 void pl_close(void *win)
@@ -533,55 +576,100 @@ void pl_close(void *win)
       call_main(close_cb, win);
 }
 
-typedef struct { Win *w; void *canvas; int lw, lh; int r[4]; int full; } PresentReq;
-
-static void present_cb(void *p)
+/* Main thread: upload what is pending and show it. */
+static void present_async(void *p)
 {
-   PresentReq *pr = p;
-   Win *w = pr->w;
-   unsigned char *px;
-   long stride;
-   int pw, ph, s = cv_scale(pr->canvas);
+   Win *w = p;
    SDL_Rect rect;
 
-   cv_pixels(pr->canvas, &px, &stride, &pw, &ph);
-   if (w->tex && (w->tw != pw || w->th != ph)) {
+   pthread_mutex_lock(&pmu);
+   w->posted = 0;
+   if (w->closing || !w->st) {
+      pthread_mutex_unlock(&pmu);
+      return;
+   }
+   if (w->tex && (w->tw != w->sw_ || w->th != w->sh_)) {
       SDL_DestroyTexture(w->tex);
       w->tex = NULL;
    }
    if (!w->tex) {
       w->tex = SDL_CreateTexture(w->r, SDL_PIXELFORMAT_ARGB8888,
-                                 SDL_TEXTUREACCESS_STREAMING, pw, ph);
-      if (!w->tex) return;
+                                 SDL_TEXTUREACCESS_STREAMING, w->sw_, w->sh_);
+      if (!w->tex) {
+         pthread_mutex_unlock(&pmu);
+         return;
+      }
       SDL_SetTextureScaleMode(w->tex, SDL_SCALEMODE_NEAREST);
-      w->tw = pw; w->th = ph;
-      pr->full = 1;
+      w->tw = w->sw_; w->th = w->sh_;
+      w->pend[0] = 0; w->pend[1] = 0; w->pend[2] = w->sw_; w->pend[3] = w->sh_;
    }
-   if (pr->full) {
-      pr->r[0] = 0; pr->r[1] = 0; pr->r[2] = pw; pr->r[3] = ph;
+   if (w->pend[0] >= 0 && w->pend[2] > w->pend[0] && w->pend[3] > w->pend[1]) {
+      rect.x = w->pend[0]; rect.y = w->pend[1];
+      rect.w = w->pend[2] - w->pend[0]; rect.h = w->pend[3] - w->pend[1];
+      SDL_UpdateTexture(w->tex, &rect, w->st + w->pend[1] * w->ststride + w->pend[0] * 4,
+                        (int)w->ststride);
    }
-   if (pr->r[2] > pr->r[0] && pr->r[3] > pr->r[1]) {
-      rect.x = pr->r[0]; rect.y = pr->r[1];
-      rect.w = pr->r[2] - pr->r[0]; rect.h = pr->r[3] - pr->r[1];
-      SDL_UpdateTexture(w->tex, &rect, px + pr->r[1] * stride + pr->r[0] * 4, (int)stride);
-   }
-   w->vw = pr->lw * s < pw ? pr->lw * s : pw;
-   w->vh = pr->lh * s < ph ? pr->lh * s : ph;
+   w->pend[0] = -1;
+   w->vw = w->pvw;
+   w->vh = w->pvh;
+   pthread_mutex_unlock(&pmu);
    render(w);
 }
 
-/* Show the canvas's changes in the window, whose logical size is lw x lh
- * (the canvas may be larger). */
+/*
+ * Show the canvas's changes in the window, whose logical size is lw x lh
+ * (the canvas may be larger), without waiting: the changed rows are
+ * copied to the staging buffer and the main thread shows them when it
+ * can. Repeated calls before then merge into one update.
+ */
 void pl_present(void *win, void *canvas, int lw, int lh, int full)
 {
-   PresentReq pr;
-   if (!win || !canvas)
+   Win *w = win;
+   unsigned char *px;
+   long stride;
+   int pw, ph, r[4], s;
+
+   if (!w || !canvas)
       return;
-   pr.w = win; pr.canvas = canvas; pr.lw = lw; pr.lh = lh;
-   pr.full = full;
-   if (!cv_take_dirty(canvas, pr.r) && !full)
+   if (!cv_take_dirty(canvas, r) && !full)
       return;
-   call_main(present_cb, &pr);
+   cv_pixels(canvas, &px, &stride, &pw, &ph);
+   s = cv_scale(canvas);
+   pthread_mutex_lock(&pmu);
+   if (!w->st || w->sw_ != pw || w->sh_ != ph) {
+      unsigned char *n = realloc(w->st, (size_t)pw * ph * 4);
+      if (!n) {
+         pthread_mutex_unlock(&pmu);
+         return;
+      }
+      w->st = n;
+      w->ststride = (long)pw * 4;
+      w->sw_ = pw;
+      w->sh_ = ph;
+      full = 1;
+      w->pend[0] = -1;
+   }
+   if (full) {
+      r[0] = 0; r[1] = 0; r[2] = pw; r[3] = ph;
+   }
+   for (int y = r[1]; y < r[3]; y++)
+      memcpy(w->st + y * w->ststride + r[0] * 4, px + y * stride + r[0] * 4,
+             (size_t)(r[2] - r[0]) * 4);
+   if (w->pend[0] < 0)
+      memcpy(w->pend, r, sizeof r);
+   else {
+      if (r[0] < w->pend[0]) w->pend[0] = r[0];
+      if (r[1] < w->pend[1]) w->pend[1] = r[1];
+      if (r[2] > w->pend[2]) w->pend[2] = r[2];
+      if (r[3] > w->pend[3]) w->pend[3] = r[3];
+   }
+   w->pvw = lw * s < pw ? lw * s : pw;
+   w->pvh = lh * s < ph ? lh * s : ph;
+   if (!w->posted) {
+      w->posted = 1;
+      post_main(present_async, w);
+   }
+   pthread_mutex_unlock(&pmu);
 }
 
 typedef struct { Win *w; int op; int a, b, c, d; const char *s; } WinReq;
@@ -683,7 +771,23 @@ int pl_position(void *win, int *x, int *y)
 void pl_state(void *win, int state) { if (win) winreq(win, R_STATE, state, 0, 0, 0, NULL, NULL); }
 void pl_resizable(void *win, int on) { if (win) winreq(win, R_RESIZABLE, on, 0, 0, 0, NULL, NULL); }
 void pl_raise(void *win) { if (win) winreq(win, R_RAISE, 0, 0, 0, 0, NULL, NULL); }
-void pl_cursor(void *win, int cursor) { if (win) winreq(win, R_CURSOR, cursor, 0, 0, 0, NULL, NULL); }
+static void cursor_async(void *p)
+{
+   int c = (int)(intptr_t)p;
+   if (c >= 0 && c < SDL_SYSTEM_CURSOR_COUNT) {
+      if (!cursors[c])
+         cursors[c] = SDL_CreateSystemCursor((SDL_SystemCursor)c);
+      if (cursors[c])
+         SDL_SetCursor(cursors[c]);
+   }
+}
+
+/* Pointer shape changes need no answer: don't wait for them. */
+void pl_cursor(void *win, int cursor)
+{
+   if (win && sdl_up)
+      post_main(cursor_async, (void *)(intptr_t)cursor);
+}
 void pl_warp(void *win, int x, int y) { if (win) winreq(win, R_WARP, x, y, 0, 0, NULL, NULL); }
 void pl_beep(void) { if (sdl_up) winreq(NULL, R_BEEP, 0, 0, 0, 0, NULL, NULL); }
 void pl_display_size(void *win, int *w, int *h)
