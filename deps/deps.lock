@@ -1,0 +1,6 @@
+# Vendored source dependencies: name, version, SHA-256 of
+# deps/<name>-<version>.tar.gz, and the URL it came from (@V@ = version).
+# Change only with deps/update.sh. build.sh verifies every checksum.
+sdl3     3.4.20                                   f3bb06f55bed9557227a700af2ea62e49497ebdf58037732a731a5fb3ef8581f https://github.com/libsdl-org/SDL/releases/download/release-@V@/SDL3-@V@.tar.gz
+blend2d  58ca9460b4138af6e793184682e9324e0a8053b2 b7887f581dc1340ce4c7198a4ccc96c79fd832fe099367db065c3b9ff5dfffd8 https://github.com/blend2d/blend2d/archive/@V@.tar.gz
+asmjit   677a10bac2c24f7e068cf1f9e675bf51c7b534ea 0bcc7d502846a307fa72c0fc0bf96a2f1b586a9f4706fe98e03cbb0852cda73c https://github.com/asmjit/asmjit/archive/@V@.tar.gz
