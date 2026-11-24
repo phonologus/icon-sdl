@@ -615,6 +615,29 @@ combined. The pixels are identical. Measured on a 1363×759 window:
 | 2,500 dashed segments, 2× window | 260 ms | 60 ms |
 | 25,000 short segments, 2× window | — | 40 ms |
 
+Text and scrolling, measured by profiling (`sample`, with symbols from
+the unstripped `src/runtime/iconx`):
+
+- **Scrolling.** `write()` past the bottom of a window scrolls with
+  `CopyArea`, which went through a temporary copy and the per-pixel GC
+  function: about 4 million pixels per line at 2×. `CopyArea` always
+  copies, so at equal scales it now moves whole rows with `memmove`,
+  bottom-up when the source is above the destination. 40 lines of
+  `write()` in `sans,14`: 100 → 20 ms.
+- **Text.** Strings are shaped once per call, and single characters
+  (`write()` draws one at a time) are shaped once per font and cached.
+  The antialiasing blend divides by 255 with an exact shift formula. Text
+  is processed over its ink width only. These are smaller gains than
+  hoped: the profile showed scrolling, not shaping, to be the cost.
+
+**Showing windows.** A window is shown at once whenever the program
+pauses naturally: waiting in `Event()`, `Pending()` (which calls
+`wsync`), `WFlush()`, `WSync()` or `WDelay()`. `pollevent()` also shows
+it, but only after `ICONSDL_FRAME_MS` (default 100) of drawing without
+such a pause. Showing more often, as at first (every 16 ms), catches
+repaints half done, a pane erased with its text not yet redrawn, which
+flickers. A program that never pauses still updates ten times a second.
+
 Drawing all the segments of one `DrawSegment` call as a single path (safe
 for drawops where overlaps don't matter) was tried and rejected. The
 spans of scattered segments merge into nearly full-width rows, which made

@@ -34,10 +34,23 @@ typedef struct {
    int dirty, d[4];		/* device x0, y0, x1, y1 */
    } Canvas;
 
+/* A shaped single character, cached: write() draws text one character
+ * at a time, and shaping (with OpenType positioning) is the costly part. */
+typedef struct {
+   uint32_t gid;
+   BLGlyphPlacement pl;
+   uint8_t ptype;
+   uint32_t flags;
+   int adv;			/* advance width */
+   double x0, x1;		/* horizontal ink extent */
+   } Glyph1;
+
 typedef struct {
    BLFontFaceCore face;
    BLFontCore font;
    int ascent, descent, maxw;
+   Glyph1 g1[256];
+   unsigned char have1[256];
    } Font;
 
 #define OPAQUE 0xFF000000u
@@ -279,10 +292,12 @@ static void apply_rows(Canvas *c, const sdlgc *gc, const int r[4], int which,
          if (m[x] == 0 || (!blend && m[x] < 128))
             continue;
          if (blend) {
-            uint32_t d = p[x], a = m[x], rr, g, b;
-            rr = ((fg >> 16 & 255) * a + (d >> 16 & 255) * (255 - a) + 127) / 255;
-            g = ((fg >> 8 & 255) * a + (d >> 8 & 255) * (255 - a) + 127) / 255;
-            b = ((fg & 255) * a + (d & 255) * (255 - a) + 127) / 255;
+            /* (fg * a + d * (255 - a)) / 255, rounded: DIV255 is exact */
+            #define DIV255(t) (((t) + 128 + (((t) + 128) >> 8)) >> 8)
+            uint32_t d = p[x], a = m[x], ia = 255 - a, rr, g, b;
+            rr = DIV255((fg >> 16 & 255) * a + (d >> 16 & 255) * ia);
+            g = DIV255((fg >> 8 & 255) * a + (d >> 8 & 255) * ia);
+            b = DIV255((fg & 255) * a + (d & 255) * ia);
             p[x] = OPAQUE | rr << 16 | g << 8 | b;
             continue;
          }
@@ -653,7 +668,31 @@ void cv_copy(void *srcp, void *dstp, const sdlgc *gc,
    if (!region(dst, &g, x2, y2, x2 + w, y2 + h, 0, r))
       return;
 
-   /* take a copy of the source region first (overlap) */
+   /*
+    * The usual case, copy mode at the same scale: move whole rows, in
+    * the order that is safe when source and destination overlap.
+    */
+   if (op == 3 && ss == ds) {
+      int ox = x * ss - x2 * ds, oy = y * ss - y2 * ds, n = r[2] - r[0];
+      bl_image_get_data(&src->img, &sd);
+      bl_image_make_mutable(&dst->img, &dd);
+      if (src == dst)
+         bl_image_get_data(&src->img, &sd);	/* same (now mutable) pixels */
+      if (src == dst && oy < 0)			/* source above: bottom up */
+         for (int dy = r[3] - 1; dy >= r[1]; dy--)
+            memmove((uint8_t *)dd.pixel_data + dy * dd.stride + r[0] * 4,
+                    (uint8_t *)sd.pixel_data + (dy + oy) * sd.stride + (r[0] + ox) * 4,
+                    (size_t)n * 4);
+      else
+         for (int dy = r[1]; dy < r[3]; dy++)
+            memmove((uint8_t *)dd.pixel_data + dy * dd.stride + r[0] * 4,
+                    (uint8_t *)sd.pixel_data + (dy + oy) * sd.stride + (r[0] + ox) * 4,
+                    (size_t)n * 4);
+      touch(dst, r[0], r[1], r[2], r[3]);
+      return;
+   }
+
+   /* otherwise: take a copy of the source region first (overlap) */
    bl_image_get_data(&src->img, &sd);
    tmp = malloc((size_t)w * ss * h * ss * 4);
    if (!tmp)
@@ -803,24 +842,38 @@ int cv_take_dirty(void *cv, int r[4])
 
 /* ---------- text ---------- */
 
-/* Icon strings are bytes; treat them as Latin-1, as X's ISO 8859-1
- * fonts do. Blend2D takes UTF-8. */
-static char *latin1_to_utf8(const char *s, int n, size_t *len)
+/* Icon strings are bytes; they are treated as Latin-1, as X's ISO 8859-1
+ * fonts do (BL_TEXT_ENCODING_LATIN1). */
+
+/* The cached shaping of single character ch. */
+static Glyph1 *glyph1(Font *f, unsigned char ch)
 {
-   char *u = malloc((size_t)n * 2 + 1), *q = u;
-   if (!u)
-      return NULL;
-   for (int i = 0; i < n; i++) {
-      unsigned char ch = (unsigned char)s[i];
-      if (ch < 0x80)
-         *q++ = (char)ch;
-      else {
-         *q++ = (char)(0xC0 | ch >> 6);
-         *q++ = (char)(0x80 | (ch & 0x3F));
+   Glyph1 *g = &f->g1[ch];
+   if (!f->have1[ch]) {
+      BLGlyphBufferCore gb;
+      BLTextMetrics tm;
+      const BLGlyphRun *run;
+      char c1 = (char)ch;
+      bl_glyph_buffer_init(&gb);
+      bl_glyph_buffer_set_text(&gb, &c1, 1, BL_TEXT_ENCODING_LATIN1);
+      bl_font_shape(&f->font, &gb);
+      bl_font_get_text_metrics(&f->font, &gb, &tm);
+      run = bl_glyph_buffer_get_glyph_run(&gb);
+      memset(g, 0, sizeof *g);
+      if (run->size >= 1) {
+         g->gid = *(const uint32_t *)run->glyph_data;
+         if (run->placement_data)
+            g->pl = *(const BLGlyphPlacement *)run->placement_data;
+         g->ptype = run->placement_type;
+         g->flags = run->flags;
       }
+      g->adv = (int)lround(tm.advance.x);
+      g->x0 = tm.bounding_box.x0;
+      g->x1 = tm.bounding_box.x1;
+      bl_glyph_buffer_destroy(&gb);
+      f->have1[ch] = 1;
    }
-   *len = (size_t)(q - u);
-   return u;
+   return g;
 }
 
 int ft_width(void *fp, const char *s, int n)
@@ -830,6 +883,8 @@ int ft_width(void *fp, const char *s, int n)
    BLTextMetrics tm;
    if (!f || n <= 0)
       return 0;
+   if (n == 1)
+      return glyph1(f, (unsigned char)s[0])->adv;
    bl_glyph_buffer_init(&gb);
    bl_glyph_buffer_set_text(&gb, s, (size_t)n, BL_TEXT_ENCODING_LATIN1);
    bl_font_shape(&f->font, &gb);
@@ -840,36 +895,63 @@ int ft_width(void *fp, const char *s, int n)
 
 /* DrawString (image = 0) or the text output of write() (image = 1: the
  * text's cell is first filled with bg, in copy mode, as X's
- * XDrawImageString does). */
-void cv_text(void *cv, const sdlgc *gc, void *fp, int x, int y,
+ * XDrawImageString does). The string is shaped once, and the glyph run
+ * drawn; returns the text's width. */
+int cv_text(void *cv, const sdlgc *gc, void *fp, int x, int y,
    const char *s, int n, int image)
 {
    Canvas *c = cv;
    Font *f = fp;
+   BLGlyphBufferCore gb;
+   BLTextMetrics tm;
+   BLGlyphRun one;
+   const BLGlyphRun *run;
+   Glyph1 *g1 = NULL;
    BLPoint o;
-   char *u;
-   size_t len;
    int r[4], w, plain;
    sdlgc g = *gc;
 
    if (!f || n <= 0)
-      return;
-   w = ft_width(f, s, n);
+      return 0;
+   bl_glyph_buffer_init(&gb);
+   if (n == 1) {				/* cached */
+      g1 = glyph1(f, (unsigned char)s[0]);
+      memset(&one, 0, sizeof one);
+      one.glyph_data = &g1->gid;
+      one.placement_data = &g1->pl;
+      one.size = 1;
+      one.placement_type = g1->ptype;
+      one.glyph_advance = (int8_t)sizeof(uint32_t);
+      one.placement_advance = (int8_t)sizeof(BLGlyphPlacement);
+      one.flags = g1->flags;
+      run = &one;
+      w = g1->adv;
+      tm.bounding_box.x0 = g1->x0;
+      tm.bounding_box.x1 = g1->x1;
+   }
+   else {
+      bl_glyph_buffer_set_text(&gb, s, (size_t)n, BL_TEXT_ENCODING_LATIN1);
+      bl_font_shape(&f->font, &gb);
+      bl_font_get_text_metrics(&f->font, &gb, &tm);
+      run = bl_glyph_buffer_get_glyph_run(&gb);
+      w = (int)lround(tm.advance.x);
+   }
    if (image) {
       g.drawop = 3; g.reverse = 0; g.fillstyle = 0;
       cv_erase(c, &g, x, y - f->ascent, w, f->ascent + f->descent);
    }
-   if (!region(c, &g, x - f->maxw, y - f->ascent - 1, x + w + f->maxw, y + f->descent + 1, 0, r))
-      return;
-   u = latin1_to_utf8(s, n, &len);
-   if (!u)
-      return;
-   mask_clear(c, r);
-   o.x = x; o.y = y;
-   bl_context_fill_utf8_text_d_rgba32(&c->mctx, &o, &f->font, u, len, 0xFFFFFFFFu);
-   free(u);
-   plain = g.drawop == 3 && !g.reverse && g.fillstyle == 0;
-   apply(c, &g, r, 0, plain);
+   /* horizontally, the shaped text's ink (at least its advance);
+    * vertically the font's ascent and descent; a pixel to spare */
+   if (region(c, &g, x + fmin(0, tm.bounding_box.x0) - 1, y - f->ascent - 1,
+              x + fmax(w, tm.bounding_box.x1) + 1, y + f->descent + 1, 0, r)) {
+      mask_clear(c, r);
+      o.x = x; o.y = y;
+      bl_context_fill_glyph_run_d_rgba32(&c->mctx, &o, &f->font, run, 0xFFFFFFFFu);
+      plain = g.drawop == 3 && !g.reverse && g.fillstyle == 0;
+      apply(c, &g, r, 0, plain);
+   }
+   bl_glyph_buffer_destroy(&gb);
+   return w;
 }
 
 /* Open a font; the face is found by fontlookup() (platform-specific). */

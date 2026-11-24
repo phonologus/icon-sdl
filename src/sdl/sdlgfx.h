@@ -50,7 +50,8 @@ void cv_fillpoly(void *cv, const sdlgc *gc, const int *xy, int n);
 void cv_erase(void *cv, const sdlgc *gc, int x, int y, int w, int h);
 void cv_copy(void *src, void *dst, const sdlgc *gc,
    int x, int y, int w, int h, int x2, int y2);
-void cv_text(void *cv, const sdlgc *gc, void *font, int x, int y,
+/* returns the text's width */
+int cv_text(void *cv, const sdlgc *gc, void *font, int x, int y,
    const char *s, int n, int image);
 
 /* pixel access, in logical pixels; out-of-range pixels read as bg */

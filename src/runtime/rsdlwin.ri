@@ -374,17 +374,34 @@ static int process_events()
 /*
  * pollevent() is called by the interpreter every few hundred
  * instructions in any graphics build. With no windows open it costs
- * nothing (and SDL is never started). Otherwise it collects events and,
- * at most 60 times a second, shows what was drawn. Returns the number of
- * instructions until the next poll, or -1 if the user closed a window.
+ * nothing (and SDL is never started). Otherwise it collects events and
+ * returns the number of instructions until the next poll, or -1 if the
+ * user closed a window.
+ *
+ * Windows are shown at once whenever the program reaches a natural
+ * pause: waiting in Event(), Pending() (which calls wsync), WFlush(),
+ * WSync() or WDelay(). pollevent() also shows them, but only if the
+ * program has been drawing for ICONSDL_FRAME_MS (default 100) without
+ * such a pause: showing more often catches repaints half done (a pane
+ * erased, its text not yet redrawn), which flickers.
  */
+static unsigned long frame_ms(void)
+   {
+   static long ms = -1;
+   if (ms < 0) {
+      char *s = getenv("ICONSDL_FRAME_MS");
+      ms = (s && atol(s) > 0) ? atol(s) : 100;
+      }
+   return (unsigned long)ms;
+   }
+
 int pollevent()
    {
    if (nwins == 0)
       return 400;
    if (process_events() < 0)
       return -1;
-   if (millisec() - lastpresent >= 16)
+   if (millisec() - lastpresent >= frame_ms())
       present(0);
    return 400;
    }
@@ -687,9 +704,10 @@ void xdis(wbp w, char *s, int n)
    pollctr >>= 1; pollctr++;
    if (CANVAS(w)) {
       mkgc(w, &g);
-      cv_text(CANVAS(w), &g, w->context->font->face, ws->x, ws->y, s, n, 1);
+      ws->x += cv_text(CANVAS(w), &g, w->context->font->face, ws->x, ws->y, s, n, 1);
       }
-   ws->x += textWidth(w, s, n);
+   else
+      ws->x += textWidth(w, s, n);
    }
 
 /*
