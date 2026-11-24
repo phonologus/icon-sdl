@@ -1,0 +1,21 @@
+# Reference test: all drawops over a striped background. Each column is
+# one drawop; the bars underneath are four background colours.
+procedure main(args)
+   ops := ["copy", "and", "andInverted", "andReverse", "clear",
+      "copyInverted", "equiv", "invert", "nand", "noop", "nor", "or",
+      "orInverted", "orReverse", "set", "xor", "reverse"]
+   &window := open("ref", "g", "canvas=hidden", "size=360,120", "bg=white", "fg=black") |
+      stop("cannot open window")
+   every i := 0 to 3 do {
+      Fg(["black", "white", "#3366CC", "#CC9933"][i + 1])
+      FillRectangle(0, 10 + 25 * i, 360, 25)
+      }
+   Fg("#22AA55")
+   Bg("#FFEEDD")
+   every i := 1 to *ops do {
+      WAttrib("drawop=" || ops[i])
+      FillRectangle(5 + 21 * (i - 1), 5, 16, 110)
+      }
+   WAttrib("drawop=copy")
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

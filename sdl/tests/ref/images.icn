@@ -1,0 +1,23 @@
+# Reference test: DrawImage with several palettes, and Pixel() readback
+# (printed on standard output).
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=200,120", "bg=white", "fg=black") |
+      stop("cannot open window")
+   DrawImage(10, 10, "8,c1,_
+      01234567_
+      12345670_
+      23456701_
+      34567012_
+      45670123_
+      56701234_
+      67012345_
+      70123456")
+   DrawImage(30, 10, "4,g16,0123456789ABCDEF")
+   DrawImage(50, 10, "8,#FF818181818181FF")
+   DrawImage(70, 10, "8,~FF818181818181FF")         # transparent zeros
+   Fg("red"); FillRectangle(100, 10, 10, 10)
+   Fg("0,32768,65535"); FillRectangle(115, 10, 10, 10)
+   every p := Pixel(100, 10, 30, 1) do write(p)
+   every p := Pixel(30, 10, 4, 1) do write(p)
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

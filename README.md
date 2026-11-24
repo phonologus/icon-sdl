@@ -33,7 +33,9 @@ New files:
 - `README.md`, `LICENSE.md`: this notice and the licence of the new code.
 - `deps/`: vendored, checksum-pinned sources for SDL3, Blend2D and AsmJit,
   with `deps/update.sh` to upgrade them.
-- `sdl/`: design notes for the new backend.
+- `sdl/`: the new backend's design notes (`sdl/design.md`); a test VM
+  (`sdl/vm/`, Debian under QEMU, fully pinned); and reference graphics
+  tests with their expected X11 outputs (`sdl/tests/ref/`).
 
 Modified upstream files: none yet.
 

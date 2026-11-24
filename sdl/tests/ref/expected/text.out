@@ -1,0 +1,7 @@
+mono,12          ascent 11 descent 2 fheight 13 fwidth 7 leading 13 width 133
+typewriter,12    ascent 10 descent 3 fheight 13 fwidth 7 leading 13 width 133
+sans,12          ascent 11 descent 3 fheight 14 fwidth 12 leading 14 width 113
+serif,12         ascent 11 descent 3 fheight 14 fwidth 12 leading 14 width 102
+sans,bold,14     ascent 13 descent 3 fheight 16 fwidth 15 leading 16 width 138
+serif,italic,14  ascent 12 descent 3 fheight 15 fwidth 13 leading 15 width 116
+fixed            ascent 11 descent 2 fheight 13 fwidth 6 leading 15 width 114

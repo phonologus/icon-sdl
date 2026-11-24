@@ -1,0 +1,19 @@
+# Reference test: clipping, CopyArea (overlapping, and between windows),
+# EraseArea.
+procedure main(args)
+   w := &window := open("ref", "g", "canvas=hidden", "size=240,160", "bg=white", "fg=black") |
+      stop("cannot open window")
+   every x := 0 to 240 by 8 do DrawLine(x, 0, x + 60, 80)
+   Clip(20, 90, 80, 50)
+   Fg("red")
+   every x := 0 to 240 by 6 do DrawLine(x, 80, x + 40, 160)
+   FillCircle(60, 115, 30)
+   Clip()
+   CopyArea(0, 0, 80, 60, 20, 10)                      # overlapping copy
+   EraseArea(150, 90, 40, 40)
+   w2 := open("ref2", "g", "canvas=hidden", "size=60,60", "bg=light blue") |
+      stop("cannot open second window")
+   DrawCircle(w2, 30, 30, 25)
+   CopyArea(w2, w, 0, 0, 60, 60, 170, 95)
+   WriteImage(w, args[1]) | stop("cannot write ", args[1])
+end

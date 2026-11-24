@@ -1,0 +1,19 @@
+# Reference test: text in the portable font families, and the metrics
+# icont reports (standard output). Glyph pixels will differ between
+# font systems; the metrics and text widths are what we compare.
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=320,170", "bg=white", "fg=black") |
+      stop("cannot open window")
+   y := 0
+   every f := "mono,12" | "typewriter,12" | "sans,12" | "serif,12" |
+         "sans,bold,14" | "serif,italic,14" | "fixed" do {
+      Font(f) | { write(f, ": no font"); next }
+      y +:= WAttrib("leading")
+      DrawString(5, y, f || ": The quick brown fox")
+      write(left(f, 16), " ascent ", WAttrib("ascent"),
+         " descent ", WAttrib("descent"), " fheight ", WAttrib("fheight"),
+         " fwidth ", WAttrib("fwidth"), " leading ", WAttrib("leading"),
+         " width ", TextWidth("The quick brown fox"))
+      }
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

@@ -1,0 +1,23 @@
+# Reference test: rectangles, circles, arcs, polygons (including a
+# self-intersecting one: X fills with the even-odd rule).
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=240,200", "bg=white", "fg=black") |
+      stop("cannot open window")
+   DrawRectangle(10, 10, 40, 30)
+   DrawRectangle(60, 10, 1, 1, 70, 10, 0, 0)          # degenerate
+   FillRectangle(80, 10, 40, 30)
+   Fg("red")
+   FillRectangle(130, 10, 1, 30, 135, 10, 30, 1)
+   Fg("blue")
+   DrawCircle(30, 80, 20)
+   FillCircle(80, 80, 20)
+   DrawArc(110, 60, 50, 40, 0, &pi / 2)
+   FillArc(170, 60, 50, 40, &pi / 4, &pi)
+   DrawCircle(30, 140, 20, &pi, &pi / 2)
+   Fg("green")
+   DrawPolygon(70, 120, 110, 130, 100, 170, 60, 160)
+   FillPolygon(120, 120, 160, 120, 140, 180)
+   Fg("purple")
+   FillPolygon(200, 110, 212, 145, 175, 123, 225, 123, 188, 145)  # star
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

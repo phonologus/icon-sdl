@@ -1,0 +1,4 @@
+Reference outputs from unmodified upstream Icon, built with X11 graphics.
+upstream commit: 8434b6e33dc20e0f31406ecf6d56f527e392cec3
+X server: xvfb 2:21.1.16-1.3+deb13u4
+VM packages: sdl/vm/packages.lock

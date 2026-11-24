@@ -1,0 +1,16 @@
+# Reference test: fill patterns and fill styles.
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=240,120", "bg=white", "fg=black") |
+      stop("cannot open window")
+   Bg("yellow")
+   pats := ["checkers", "grid", "verylight", "4,#5A5A", "8,#FF818181818181FF"]
+   every i := 1 to *pats do {
+      Pattern(pats[i])
+      WAttrib("fillstyle=masked")
+      FillRectangle(10 + 45 * (i - 1), 10, 40, 40)
+      WAttrib("fillstyle=textured")
+      FillRectangle(10 + 45 * (i - 1), 60, 40, 40)
+      }
+   WAttrib("fillstyle=solid")
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

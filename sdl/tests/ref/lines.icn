@@ -1,0 +1,31 @@
+# Reference test: lines, points, segments, polylines, curves;
+# line widths and line styles.
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=240,200", "bg=white", "fg=black") |
+      stop("cannot open window")
+   every i := 1 to 4 do {
+      WAttrib("linewidth=" || i)
+      DrawLine(10, 10 * i, 110, 10 * i)              # horizontal
+      DrawLine(120 + 10 * i, 10, 120 + 10 * i, 50)    # vertical
+      }
+   WAttrib("linewidth=1")
+   y := 60
+   Bg("orange")                    # striped draws its gaps in bg
+   every s := "solid" | "dashed" | "striped" do {
+      WAttrib("linestyle=" || s)
+      every w := 1 | 3 do {
+         WAttrib("linewidth=" || w)
+         y +:= 12
+         DrawLine(10, y, 200, y)
+         }
+      }
+   WAttrib("linestyle=solid", "linewidth=1")
+   Bg("white")
+   DrawLine(10, 140, 100, 190)                         # shallow and steep diagonals
+   DrawLine(10, 140, 40, 195)
+   DrawSegment(110, 140, 150, 140, 110, 150, 150, 190)
+   every x := 160 to 230 by 7 do every y := 140 to 195 by 7 do DrawPoint(x, y)
+   DrawLine(180, 10, 230, 10, 230, 50, 200, 30)        # polyline
+   DrawCurve(170, 60, 190, 20, 230, 60)
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

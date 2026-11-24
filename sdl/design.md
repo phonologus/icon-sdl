@@ -133,11 +133,7 @@ built offline from these exact tarballs, in about 30 s.
 1. Inventory the backend interface: every function icont's X11 backend
    provides, which layer it belongs to, and its exact semantics. Done; see
    "Backend inventory" below.
-2. Reference outputs: run the X11 icont under Xvfb on Linux and save
-   images of graphics test programs with `WriteImage`. The new backend
-   renders the same programs without a window, and the pixels are
-   compared. Text will differ; geometry, fills, XOR and CopyArea should
-   match.
+2. Reference outputs. Done; see "Test VM and reference outputs" below.
 3. Add a configuration (`config/macintosh-sdl`, later `config/linux-sdl`)
    and the build integration.
 4. Port the canvas and platform layers from the prototype into
@@ -285,3 +281,46 @@ The counts are the line counts of the X implementation.
 5. **Antialiasing:** accepted. Axis-aligned shapes match X exactly at
    integer scale. Diagonals and arcs are compared against the reference
    with a tolerance.
+
+## Test VM and reference outputs
+
+`sdl/vm/vm.sh` manages a headless Debian 13 arm64 VM under QEMU with
+macOS's Hypervisor.framework (`create`, `start`, `stop`, `ssh`, `status`,
+`destroy`). Its inputs are pinned:
+
+- the Debian cloud image, build `20261116-2664`, by SHA-512;
+- its packages, through snapshot.debian.org at `20261116T000000Z`.
+  `sdl/vm/provision.sh` points apt there and disables automatic upgrades;
+  the exact versions installed are recorded in `sdl/vm/packages.lock`.
+
+Only `create` uses the network. The VM's state lives in `sdl/vm/state/`,
+which git ignores.
+
+`sdl/tests/ref/make-reference.sh` builds unmodified upstream Icon
+(`master`) with X11 graphics in the VM. It then runs each
+`sdl/tests/ref/*.icn` under Xvfb (24-bit TrueColor) and stores the image
+(`NAME.gif`, from `WriteImage`) and standard output (`NAME.out`) in
+`sdl/tests/ref/expected/`. Two runs produce byte-identical files.
+
+The test programs use the built-in `open(..., "g", ...)` and assign
+`&window`, so they need no IPL. (`WOpen` is an IPL procedure in
+`gprocs/graphics`, not a built-in.)
+
+| Test | Covers |
+|---|---|
+| `lines` | widths, `solid`/`dashed`/`striped` (striped gaps are drawn in bg), points, segments, polylines, `DrawCurve` |
+| `shapes` | rectangles (including degenerate ones), circles, arcs, polygons; a self-intersecting star shows X's even-odd fill rule |
+| `drawops` | all 16 X drawops plus `reverse`, over four background colours |
+| `patterns` | named and bit-string patterns, `fillstyle=masked` and `textured` |
+| `clipcopy` | `Clip`, overlapping `CopyArea`, `CopyArea` between windows, `EraseArea` |
+| `images` | `DrawImage` with `c1`, `g16`, bilevel and transparent bilevel strings; `Pixel` readback |
+| `text` | the portable font families, `fixed`, and their metrics |
+
+Facts the reference shows:
+
+- `Pixel()` returns `0,32767,65535` for a colour set as `0,32768,65535`.
+  The value is quantised to 8 bits per channel and passed through gamma
+  2.5; we should reproduce that.
+- X's metrics for `mono,12`: ascent 11, descent 2, fheight 13, fwidth 7,
+  leading 13. For `sans,12`: fwidth is 12, the font's maximum glyph width,
+  far more than its average.
