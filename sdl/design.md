@@ -131,8 +131,8 @@ built offline from these exact tarballs, in about 30 s.
 ## Plan
 
 1. Inventory the backend interface: every function icont's X11 backend
-   provides, which layer it belongs to, and its exact semantics (below,
-   to come).
+   provides, which layer it belongs to, and its exact semantics. Done; see
+   "Backend inventory" below.
 2. Reference outputs: run the X11 icont under Xvfb on Linux and save
    images of graphics test programs with `WriteImage`. The new backend
    renders the same programs without a window, and the pixels are
@@ -142,3 +142,149 @@ built offline from these exact tarballs, in about 30 s.
    and the build integration.
 4. Port the canvas and platform layers from the prototype into
    `src/runtime`.
+
+## Backend inventory
+
+### How a backend plugs in
+
+Icon 9.5 already has two backends: X11 (`XWindows`) and MS Windows
+(`WinGraphics`). A backend consists of:
+
+- **its implementation files**, included by `src/runtime/rwinsys.r`
+  (`rxwin.ri`) and `src/runtime/rwinrsc.r` (`rxrsc.ri`);
+- **a header** (`h/xwin.h`, `h/mswin.h`). It defines:
+  - the drawing primitives the generic code calls as macros: `drawarcs`,
+    `drawlines`, `drawpoints`, `drawrectangles`, `drawsegments`,
+    `drawstrng`, `fillarcs`, `fillpolygon`;
+  - the font metric macros (`ASCENT`, `DESCENT`, `FHEIGHT`, `FWIDTH`,
+    `LEADING`, `TEXTWIDTH`, `MAXDESCENDER`);
+  - the `DRAWOP_*` codes and the modifier masks (`ShiftMask`,
+    `ControlMask`, `Mod1Mask`);
+- **its own `#ifdef` sections** in `h/graphics.h`, which hold the window,
+  context, font, colour and display structures, and in `h/rproto.h`.
+
+An SDL backend (`SDLGraphics`) adds `h/sdlwin.h`, `rsdlwin.ri` and
+`rsdlrsc.ri`, plus its own sections in those headers. Other upstream files
+that mention `XWindows` and need a matching branch:
+
+| Files | `XWindows` mentions each |
+|---|---|
+| `h/config.h` | 6 |
+| `runtime/rsys.r` | 4 |
+| `h/grttin.h`, `h/features.h`, `h/rexterns.h`, `h/sys.h`, `common/xwindow.c` | 2 |
+
+`config/setup.sh` chooses between `Graphics` and `NoGraphics`; it needs an
+SDL option.
+
+### Interface facts
+
+These are in the generic code and constrain the backend:
+
+- **Event queue.** `qevent()` (`rwindow.r`) builds Icon list elements, so
+  it must run on an Icon thread. The SDL main thread only queues raw
+  events; `pollevent()` and `wgetq()` drain them into `qevent`.
+- **Event values.** `qevent` takes a millisecond timestamp, used for
+  `&interval`, and X-style modifier masks:
+  - `ControlMask` becomes `&control`;
+  - `Mod1Mask` becomes `&meta`;
+  - `ShiftMask` becomes `&shift`.
+- **Polling.** `interp.r` calls `pollevent()` every N instructions, where N
+  is its return value; X returns 400. Ours should also present the dirty
+  canvases there.
+- **Special keys** are reported as X keysym integers. `Key_Left` is 65361,
+  and the IPL's `keysyms.icn` depends on those values. We need a table
+  mapping SDL key codes to X keysyms.
+- **Drag events.** X reports drags as the most recently pressed button
+  still held. A `|`-for-`&` slip in `handle_mouse` makes the X code report
+  `buttonorder[0]` always. Reproduce that behaviour, not the code.
+- **Lines** use projecting caps and mitre joins (`setlinestyle`). In
+  Blend2D: `BL_STROKE_CAP_SQUARE`, `BL_STROKE_JOIN_MITER_CLIP`.
+- **`drawop`** accepts all 16 X GC functions by name (`and`,
+  `andInverted`, `andReverse`, `clear`, `copy`, `copyInverted`, `equiv`,
+  `invert`, `nand`, `noop`, `nor`, `or`, `orInverted`, `orReverse`, `set`,
+  `xor`), plus `reverse`, which is `xor` with `fg ^ bg`. The coverage-mask
+  technique handles every one of them: for each covered pixel, apply the
+  function to (fg, pixel).
+- **`linestyle`**: `solid`, `dashed` (alias `onoff`), `striped` (alias
+  `doubledash`).
+- **`fillstyle`**: `solid`; `masked` (aliases `stippled`, `patterned`);
+  `textured` (aliases `opaquestippled`, `opaquepatterned`). Patterns come
+  from `Pattern()`: `SetPattern` takes a name, `SetPatternBits` a bit
+  array.
+- **Gamma.** Icon colours are linear intensities, gamma-corrected for the
+  device. `GammaCorrection` defaults to 2.5 (`graphics.h`); MS Windows
+  uses 1.0. `capture` and `getpixel` apply the inverse.
+- **Images.** GIF reading and writing is already portable
+  (`readGIF`/`writeGIF`). The X backend adds XBM and XPM. Blend2D reads and
+  writes PNG, JPEG, BMP and QOI.
+
+### Functions by layer
+
+The counts are the line counts of the X implementation.
+
+**Platform layer (SDL, main-thread requests or the event queue):**
+
+| X function(s) | Notes |
+|---|---|
+| `wopen` (101), `wmap` (230), `makeIcon` | Create the SDL window; attribute processing stays. `wmap` is mostly X window-manager handshaking and shrinks a lot. |
+| `wclose`, `free_window` (part) | Destroy the window; free the canvas. |
+| `pollevent`, `wgetq`, `handle_misc` (133), `handle_mouse`, `handle_keypress`, `translate_key_event`, `handle_config` | Drain the main thread's queue into `qevent`; present dirty canvases; key and mouse translation as above. |
+| `handle_exposures`, `wsync`, `wflush`, `wflushall` | Exposes are handled on the main thread; flushing presents. |
+| `do_config`, `moveResizeWindow`, `moveWindow`, `setgeometry`, `setwidth`, `setheight`, `allowresize`, `getpos` | Window geometry. A resize also resizes the canvas. Position is a no-op under Wayland. |
+| `setcanvas`, `getcanvas`, `seticonicstate`, `geticonic` | `normal`, `hidden`, `iconic` (minimised), `maximal` (maximised). `root` isn't supported. |
+| `setwindowlabel`, `seticonlabel`, `seticonimage`, `seticonpos`, `geticonpos` | Window title, and the window icon via `SDL_SetWindowIcon`. Icon labels and positions are no-ops on modern desktops. |
+| `setpointer`, `getpointername` | X's 78 cursor-font names, mapped to the nearest of SDL's system cursors. |
+| `warpPointer`, `query_pointer`, `query_rootpointer` | Warping is a no-op under Wayland. |
+| `raiseWindow`, `lowerWindow`, `walert` | Lowering has no SDL call. `walert` needs a beep; SDL has none, so use a platform call. |
+| `setdisplay`, `getdisplay`, `getvisual`, `getdefault` | Multiple displays and X resources are dropped. `getdefault` fails. `getvisual` reports TrueColor-like values. |
+
+**Canvas layer (portable pixels, Blend2D):**
+
+| X function(s) | Notes |
+|---|---|
+| `drawarcs`, `drawlines`, `drawpoints`, `drawrectangles`, `drawsegments`, `drawstrng`, `fillarcs`, `fillpolygon` (macros) | Become functions. They take X's argument structs (`XPoint`, `XArc`, `XSegment`, `XRectangle`). `sdlwin.h` must define them; `mswin.h` maps them to Windows types, so it can't be reused. Arc angles are whatever the header's `ANGLE()`/`EXTENT()` macros produce. X converts radians to negated 64ths of a degree; MS Windows passes radians unchanged. We can pass radians straight to Blend2D, whose y-down coordinates make positive angles clockwise, the same as X's negation. |
+| `fillrectangles`, `eraseArea` | |
+| `copyArea` (136) | Within one canvas, and between windows (another canvas). The X code's two-display case goes away. |
+| `capture` (80), `getpixel_init`, `getpixel_term`, `getpixel` (40), `getximage` | Read pixels, with inverse gamma. |
+| `strimage` (85), `blimage` (68) | Write pixels from Icon image strings. |
+| `readimage`, `loadimage` (145), `dumpimage` (103) | GIF stays portable. Add PNG, JPEG, BMP via Blend2D. XBM/XPM: decide (below). |
+| `setclip`, `unsetclip` | |
+| `SetPattern`, `SetPatternBits` | Stipple bitmaps, applied as a mask. |
+| `postcursor`, `scrubcursor`, `setcursor` | Icon's own text cursor, drawn into the canvas. |
+| `xdis`, `wputc` (122) | Text output and scrolling, built on `drawstrng` and `copyArea`. |
+| `resizePixmap` | Becomes `canvas_resize`. |
+| `TEXTWIDTH`, `ASCENT`, `DESCENT`, `FHEIGHT`, `FWIDTH`, `MAXDESCENDER` (macros) | From Blend2D font metrics. `FWIDTH` is X's `max_bounds.width`. |
+
+**Context and resources (portable bookkeeping):**
+
+| X function(s) | Notes |
+|---|---|
+| `setfg`, `setbg`, `isetfg`, `isetbg`, `setfgrgb`, `setbgrgb`, `resetfg`, `toggle_fgbg`, `getfg`, `getbg`, `setgamma`, `freecolor` | Colours become plain RGB values plus the name `WAttrib` reports. |
+| `nativecolor` | X colour names (`rgb.txt`, such as `LightSlateGray`) need a built-in table; Icon's own names are parsed portably by `parsecolor`. |
+| `alc_rgb` (126), `alc_centry`, `alc_color`, `copy_colors`, `free_xcolor`, `free_xcolors`, `go_virtual`, `remap`, `xcolor`, `lcolor` | X colormap management. Almost all of it disappears with TrueColor. |
+| `mutable_color` (77), `set_mutable`, `get_mutable_name`, `free_mutable` | Need colormap cells, which modern TrueColor X servers don't offer either. Decide (below). |
+| `setdrawop`, `getdrawop`, `setlinestyle`, `getlinestyle`, `setlinewidth`, `setfillstyle`, `setleading`, `setimage`, `rebind` | Context fields. |
+| `alc_context`, `clone_context`, `free_context`, `alc_winstate` | Structure allocation, minus the X fields. |
+| `setfont`, `getfntnam`, `alc_font` (58), `findfont` (93), `tryfont`, `okfont`, `fontcmp`, `fieldcmp`, `xlfd_field`, `xlfd_size` | X's XLFD font matching is replaced by `parsefont` (portable) → CoreText or fontconfig → Blend2D face. |
+| `alc_display` (127), `free_display` | One global SDL "display". |
+
+### Decisions needed
+
+1. **Mutable colours** (`NewColor`, `Color` with a mutable index). Either
+   `NewColor` fails, or we emulate mutable colours by tracking the pixels
+   that use each entry. The X code already fails when it can't get a
+   colour cell, even after falling back to a virtual colormap
+   (`mutable_color`), which TrueColor X servers can't provide. So failing
+   is existing behaviour. Suggest: fail for now.
+2. **XBM/XPM images.** Suggest: drop at first, since PNG, JPEG and GIF
+   cover practice. Add a small XBM reader later if IPL programs need it.
+3. **Gamma.** Use 2.5 like X, which gives pixel-identical output against
+   the X reference? Or 1.0 / sRGB, which is closer to modern displays? This
+   affects every colour. Suggest 2.5 to start, since it makes the
+   reference comparison possible.
+4. **`&meta` on macOS:** Option or Command? XQuartz maps Option to `Mod1`
+   by default. Suggest Option, with Command available through a setting.
+5. **Antialiasing.** X draws aliased; Blend2D always antialiases. At 2×
+   with pixel-centred strokes, axis-aligned shapes match exactly, but
+   diagonals and arcs won't be pixel-identical. Suggest: accept it, and
+   compare geometry against the reference with a tolerance.
