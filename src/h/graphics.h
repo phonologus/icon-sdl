@@ -10,6 +10,10 @@
    #include "../h/mswin.h"
 #endif					/* WinGraphics */
 
+#ifdef SDLGraphics
+   #include "../h/sdlwin.h"
+#endif					/* SDLGraphics */
+
 #ifndef MAXXOBJS
    #define MAXXOBJS 256
 #endif					/* MAXXOBJS */
@@ -153,6 +157,13 @@ typedef struct _wfont {
       LONG	height;
    #endif				/* WinGraphics */
 
+   #ifdef SDLGraphics
+      int	ascent, descent;	/* font metrics, in pixels */
+      int	height;			/* ascent + descent */
+      int	fwidth;			/* maximum character width */
+      void	*face;			/* src/sdl font handle */
+   #endif				/* SDLGraphics */
+
    } wfont, *wfp;
 
 /*
@@ -185,6 +196,10 @@ struct imgmem {
    #ifdef WinGraphics
       COLORREF *crp;
    #endif				/* WinGraphics */
+
+   #ifdef SDLGraphics
+      unsigned int *pix;		/* copy of the pixels, 0xRRGGBB */
+   #endif				/* SDLGraphics */
    };
 
 #define TCH1 '~'			/* usual transparent character */
@@ -257,6 +272,17 @@ typedef struct _wcontext {
       char	*fgname, *bgname;
       int	leading, bkmode;
    #endif				/* WinGraphics*/
+
+   #ifdef SDLGraphics
+      unsigned long fg, bg;		/* device colours, 0xRRGGBB */
+      char	fgname[6+MAXCOLORNAME];	/* names for WAttrib */
+      char	bgname[6+MAXCOLORNAME];
+      int	linestyle;
+      int	linewidth;
+      int	leading;		/* inter-line leading */
+      int	patwidth;		/* fill pattern: width, and bits */
+      C_integer	*patbits;		/*  (NULL if none) */
+   #endif				/* SDLGraphics */
 
    } wcontext, *wcp;
 
@@ -342,6 +368,12 @@ typedef struct _wstate {
       int	nChildren;
       childcontrol *child;
    #endif				/* WinGraphics */
+
+   #ifdef SDLGraphics
+      void	*win;			/* src/sdl window, NULL if hidden */
+      void	*canvas;		/* src/sdl canvas (the pixels) */
+      int	iconic;			/* NormalState, IconicState, ... */
+   #endif				/* SDLGraphics */
 
    } wstate, *wsp;
 

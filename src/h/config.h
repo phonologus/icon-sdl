@@ -21,6 +21,10 @@
  */
 #ifdef Graphics
 
+   #ifdef SDLGraphics
+      #undef XWindows
+      #undef WinGraphics
+   #else				/* SDLGraphics */
    #ifndef XWindows
       #ifdef MSWIN
          #undef WinGraphics
@@ -29,6 +33,7 @@
          #define XWindows 1
       #endif				/* Graphics */
    #endif				/* XWindows */
+   #endif				/* SDLGraphics */
 
    #ifndef NoXpmFormat
       #ifdef XWindows
@@ -40,6 +45,7 @@
 #else					/* Graphics */
    #undef XWindows
    #undef WinGraphics
+   #undef SDLGraphics
 #endif					/* Graphics */
 
 /*

@@ -323,6 +323,26 @@ int		bigrand		(dptr da, dptr dx);
       void	wflushall		(void);
    #endif				/* XWindows */
 
+   #ifdef SDLGraphics
+      /*
+       * Implementation routines specific to SDL3 + Blend2D (icon-sdl fork):
+       * the drawing primitives that X defines as macros, and helpers.
+       */
+      void	drawarcs	(wbp w, XArc *arcs, int narcs);
+      void	drawlines	(wbp w, XPoint *points, int npoints);
+      void	drawpoints	(wbp w, XPoint *points, int npoints);
+      void	drawrectangles	(wbp w, XRectangle *recs, int nrecs);
+      void	drawsegments	(wbp w, XSegment *segs, int nsegs);
+      void	drawstrng	(wbp w, int x, int y, char *s, int slen);
+      void	fillarcs	(wbp w, XArc *arcs, int narcs);
+      void	fillpolygon	(wbp w, XPoint *pts, int npts);
+      int	textWidth	(wbp w, char *s, int n);
+      int	displayHeight	(wbp w);
+      int	displayWidth	(wbp w);
+      void	unsetclip	(wbp w);
+      int	seticonimage	(wbp w, dptr dp);
+   #endif				/* SDLGraphics */
+
    #ifdef WinGraphics
       /*
        * Implementation routines specific to MS Windows

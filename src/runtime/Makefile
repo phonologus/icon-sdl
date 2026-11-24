@@ -9,7 +9,7 @@ HDRS = ../h/define.h ../h/arch.h ../h/config.h ../h/typedefs.h \
 	  ../h/rmacros.h ../h/rexterns.h ../h/rstructs.h \
 	  ../h/rproto.h ../h/mproto.h ../h/sys.h
 
-GHDRS = ../h/graphics.h ../h/xwin.h ../h/mswin.h
+GHDRS = ../h/graphics.h ../h/xwin.h ../h/mswin.h ../h/sdlwin.h
 
 COBJS =	../common/long.o ../common/time.o \
 	../common/rswitch.o ../common/xwindow.o \
@@ -54,6 +54,6 @@ keyword.o:  ../h/kdefs.h ../h/features.h ../h/version.h
 
 rdebug.o:   ../h/opdefs.h
 
-rwinrsc.o:  rxrsc.ri
+rwinrsc.o:  rxrsc.ri rsdlrsc.ri
 
-rwinsys.o:  rxwin.ri rmswin.ri
+rwinsys.o:  rxwin.ri rmswin.ri rsdlwin.ri ../sdl/sdlgfx.h

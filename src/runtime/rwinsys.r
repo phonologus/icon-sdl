@@ -15,5 +15,8 @@
    #ifdef WinGraphics
       #include "rmswin.ri"
    #endif				/* WinGraphics */
+   #ifdef SDLGraphics
+      #include "rsdlwin.ri"
+   #endif				/* SDLGraphics */
 
 #endif					/* Graphics */

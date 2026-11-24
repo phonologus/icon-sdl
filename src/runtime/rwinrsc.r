@@ -22,6 +22,9 @@ int win_highwater = -1;
 #ifdef XWindows
 #include "rxrsc.ri"
 #endif					/* XWindows */
+#ifdef SDLGraphics
+#include "rsdlrsc.ri"
+#endif					/* SDLGraphics */
 
 /*
  * allocate a window binding structure

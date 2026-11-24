@@ -135,7 +135,8 @@ built offline from these exact tarballs, in about 30 s.
    "Backend inventory" below.
 2. Reference outputs. Done; see "Test VM and reference outputs" below.
 3. Add a configuration (`config/macintosh-sdl`, later `config/linux-sdl`)
-   and the build integration.
+   and the build integration. Done for macOS; see "The macintosh-sdl
+   configuration" below.
 4. Port the canvas and platform layers from the prototype into
    `src/runtime`.
 
@@ -324,3 +325,53 @@ Facts the reference shows:
 - X's metrics for `mono,12`: ascent 11, descent 2, fheight 13, fwidth 7,
   leading 13. For `sans,12`: fwidth is 12, the font's maximum glyph width,
   far more than its average.
+
+## The macintosh-sdl configuration
+
+    make SDL-Configure name=macintosh-sdl && make Icont
+
+`SDL-Configure` is `X-Configure` plus a check that the configuration
+defines `SDLGraphics`. Both run `setup.sh NAME Graphics`, so `define.h`
+gets `Graphics`, and `config/macintosh-sdl/define.h` adds `SDLGraphics`.
+`config.h` then defines neither `XWindows` nor `WinGraphics`.
+
+The build has two layers:
+
+- **`src/sdl`** (plain C, built with CMake) holds everything that includes
+  SDL or Blend2D headers. It builds `libiconsdl.a`, plus SDL3, Blend2D and
+  AsmJit from `deps/`. Its `build.sh` verifies the checksums, unpacks the
+  tarballs into `src/sdl/build`, and runs one CMake build without network
+  access. In other configurations, `src/sdl`'s Makefile does nothing.
+- **The runtime backend** (`rsdlwin.ri`, `rsdlrsc.ri`, `h/sdlwin.h`) goes
+  through rtt. rtt never reads system headers, so these files use only
+  plain C types and call into `src/sdl` through `src/sdl/sdlgfx.h`.
+  Window and canvas handles are `void *`.
+
+`config/macintosh-sdl/Makedefs` links iconx with `libiconsdl.a`, the
+static SDL3 and Blend2D libraries, the macOS frameworks SDL uses, and
+`-lc++ -lobjc`.
+
+Notes:
+
+- **The top-level `.gitignore` ignores every file named `Makedefs`.** It is
+  meant for the generated top-level one. `config/macintosh-sdl/Makedefs`
+  had to be added with `git add -f`, and copies made with
+  `git ls-files --exclude-standard` miss it.
+- **The linker warns** "reducing alignment of section `__DATA,__common`
+  from 0x8000 to 0x4000". This is upstream code, not ours.
+  `fwindow.r` has `char ConsoleStringBuf[MaxReadStr * 48]`, a 24 KB
+  tentative definition. Apple's toolchain aligns common symbols by size
+  and then caps them at the segment limit. A `char` buffer needs no
+  alignment, and any graphics build on macOS would warn the same way.
+- **`pollevent()` runs every 400 instructions in any graphics build.**
+  With no window open, the SDL version returns at once and never starts
+  SDL, so non-graphics programs are unaffected.
+
+Verified (2026-11-24):
+
+| Build | Result |
+|---|---|
+| `macintosh-sdl` | full test suite passes (`make Ilib && make Test`); `&features` includes "graphics" and "SDL graphics"; `open(..., "g")` fails cleanly |
+| `macintosh` without graphics, from this branch | full test suite passes; `src/sdl` does nothing |
+| Linux X11, from this branch, in the VM | full test suite passes; `make-reference.sh --check` gives byte-identical output |
+| `macintosh-sdl` from a fresh copy, network denied by `sandbox-exec` | builds |

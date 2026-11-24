@@ -1,0 +1,156 @@
+/*
+ * File: rsdlwin.ri - SDL3 + Blend2D graphics backend
+ * (icon-sdl fork; MIT licence, see LICENSE.md).
+ *
+ * This file implements the interface rwindow.r and fwindow.r expect of a
+ * window system (see the "graphics implementation routines" in
+ * rproto.h). It is processed by rtt, so it uses only plain C; everything
+ * that touches SDL or Blend2D is in src/sdl behind sdlgfx.h.
+ *
+ * STATUS: skeleton. The configuration builds and links against SDL3 and
+ * Blend2D, but no window can be opened yet: wopen() fails, so none of
+ * the other routines can be reached. They are placeholders, to be
+ * replaced as the canvas and platform layers are ported from the
+ * prototype (see sdl/design.md).
+ */
+
+#include "../sdl/sdlgfx.h"
+
+/*
+ * pollevent() is called by the interpreter every few hundred
+ * instructions in any graphics build; with no windows open it must cost
+ * nothing (and must not start SDL). Returns the number of instructions
+ * until the next poll.
+ */
+int pollevent()
+   {
+   return 400;
+   }
+
+/*
+ * wopen() - open a window. Not yet implemented: fail, after checking that
+ * SDL3 and Blend2D are linked and working.
+ */
+FILE *wopen(char *name, struct b_list *lp, dptr attr, int n, int *err_index)
+   {
+   *err_index = -1;			/* plain failure, not an error */
+   if (sdlgfx_probe() == 0)
+      return NULL;
+   return NULL;
+   }
+
+/*
+ * ---------------------------------------------------------------------
+ * Placeholders: unreachable until wopen() can succeed.
+ * ---------------------------------------------------------------------
+ */
+
+int wclose(wbp w) { return 0; }
+void wflush(wbp w) { }
+void wsync(wbp w) { }
+int wgetq(wbp w, dptr res) { return -1; }
+int wputc(int ci, wbp w) { return 0; }
+void xdis(wbp w, char *s, int n) { }
+int do_config(wbp w, int status) { return Failed; }
+int rebind(wbp w, wbp w2) { return Failed; }
+
+/* drawing primitives */
+void drawarcs(wbp w, XArc *arcs, int narcs) { }
+void drawlines(wbp w, XPoint *points, int npoints) { }
+void drawpoints(wbp w, XPoint *points, int npoints) { }
+void drawrectangles(wbp w, XRectangle *recs, int nrecs) { }
+void drawsegments(wbp w, XSegment *segs, int nsegs) { }
+void drawstrng(wbp w, int x, int y, char *s, int slen) { }
+void fillarcs(wbp w, XArc *arcs, int narcs) { }
+void fillpolygon(wbp w, XPoint *pts, int npts) { }
+void fillrectangles(wbp w, XRectangle *recs, int nrecs) { }
+void eraseArea(wbp w, int x, int y, int width, int height) { }
+int copyArea(wbp w, wbp w2, int x, int y, int wd, int h, int x2, int y2)
+   { return Failed; }
+void setclip(wbp w) { }
+void unsetclip(wbp w) { }
+
+/* text */
+int textWidth(wbp w, char *s, int n) { return n * FWIDTH(w); }
+int setfont(wbp w, char **s) { return Failed; }
+void getfntnam(wbp w, char *answer) { strcpy(answer, w->context->font->name); }
+int setleading(wbp w, int i) { w->context->leading = i; return Succeeded; }
+int setcursor(wbp w, int on) { return Succeeded; }
+
+/* colours and graphics context */
+int setfg(wbp w, char *s) { return Failed; }
+int setbg(wbp w, char *s) { return Failed; }
+int isetfg(wbp w, int fg) { return Failed; }
+int isetbg(wbp w, int bg) { return Failed; }
+void getfg(wbp w, char *answer) { strcpy(answer, w->context->fgname); }
+void getbg(wbp w, char *answer) { strcpy(answer, w->context->bgname); }
+void toggle_fgbg(wbp w) { }
+int setgamma(wbp w, double gamma) { w->context->gamma = gamma; return Succeeded; }
+int nativecolor(wbp w, char *s, long *r, long *g, long *b) { return 0; }
+void freecolor(wbp w, char *s) { }
+int mutable_color(wbp w, dptr argv, int ac, int *retval) { return Failed; }
+int set_mutable(wbp w, int i, char *s) { return Failed; }
+char *get_mutable_name(wbp w, int mute_index) { return NULL; }
+void free_mutable(wbp w, int mute_index) { }
+int setdrawop(wbp w, char *val) { return Failed; }
+void getdrawop(wbp w, char *answer) { strcpy(answer, "copy"); }
+int setlinestyle(wbp w, char *s) { return Failed; }
+void getlinestyle(wbp w, char *answer) { strcpy(answer, "solid"); }
+int setlinewidth(wbp w, LONG linewid) { return Failed; }
+int setfillstyle(wbp w, char *s) { return Failed; }
+int SetPattern(wbp w, char *name, int len) { return Failed; }
+int SetPatternBits(wbp w, int width, C_integer *bits, int nbits) { return Failed; }
+
+/* images and pixels */
+int strimage(wbp w, int x, int y, int width, int height,
+   struct palentry *e, unsigned char *s, word len, int on_icon)
+   { return -1; }
+int blimage(wbp w, int x, int y, int wd, int h,
+   int ch, unsigned char *s, word len)
+   { return Failed; }
+int capture(wbp w, int x, int y, int width, int height, short *data)
+   { return 0; }
+int getpixel_init(wbp w, struct imgmem *imem) { return Failed; }
+int getpixel_term(wbp w, struct imgmem *imem) { return Succeeded; }
+int getpixel(wbp w, int x, int y, long *rv, char *s, struct imgmem *imem)
+   { return Failed; }
+int readimage(wbp w, char *filename, int x, int y, int *status)
+   { return Failed; }
+int dumpimage(wbp w, char *filename, unsigned int x, unsigned int y,
+   unsigned int width, unsigned int height)
+   { return Failed; }
+int setimage(wbp w, char *val) { return Failed; }
+
+/* window geometry and state */
+int setgeometry(wbp w, char *geo) { return Failed; }
+int setwidth(wbp w, SHORT new_width) { return Failed; }
+int setheight(wbp w, SHORT new_height) { return Failed; }
+int allowresize(wbp w, int on) { return Succeeded; }
+int getpos(wbp w) { return Failed; }
+int setcanvas(wbp w, char *s) { return Failed; }
+void getcanvas(wbp w, char *s) { strcpy(s, "hidden"); }
+int seticonicstate(wbp w, char *s) { return Failed; }
+void geticonic(wbp w, char *answer) { strcpy(answer, "0"); }
+int seticonlabel(wbp w, char *val) { return Succeeded; }
+int seticonimage(wbp w, dptr dp) { return Failed; }
+int setwindowlabel(wbp w, char *val) { return Succeeded; }
+int seticonpos(wbp w, char *s) { return Failed; }
+int geticonpos(wbp w, char *s) { return Failed; }
+int raiseWindow(wbp w) { return Succeeded; }
+int lowerWindow(wbp w) { return Succeeded; }
+int walert(wbp w, int volume) { return Succeeded; }
+
+/* pointer */
+int setpointer(wbp w, char *val) { return Failed; }
+void getpointername(wbp w, char *answer) { strcpy(answer, "left ptr"); }
+void warpPointer(wbp w, int x, int y) { }
+int query_pointer(wbp w, XPoint *pp) { return Failed; }
+int query_rootpointer(XPoint *pp) { return Failed; }
+
+/* display */
+int setdisplay(wbp w, char *s) { return Failed; }
+void getdisplay(wbp w, char *answer) { *answer = '\0'; }
+int getvisual(wbp w, char *answer) { return Failed; }
+int getdefault(wbp w, char *prog, char *opt, char *answer) { return Failed; }
+int displayHeight(wbp w) { return 0; }
+int displayWidth(wbp w) { return 0; }

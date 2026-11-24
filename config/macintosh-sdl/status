@@ -1,0 +1,33 @@
+System configuration:
+
+	Apple Macintosh running MacOS, with the SDL3 + Blend2D graphics
+	backend of the icon-sdl fork. This configuration is not part of
+	upstream Icon; see README.md.
+
+Latest Icon version:
+
+	Version 9.5.25a of September 7, 2025
+
+Installer:
+
+	icon-sdl fork (github.com/phonologus/icon-sdl)
+
+Missing features:
+
+	Graphics backend is work in progress.
+
+Known bugs:
+
+	None known
+
+Comments:
+
+	Configure with "make SDL-Configure name=macintosh-sdl", then
+	"make Icont" as usual. SDL3, Blend2D and AsmJit are built from
+	the checksum-pinned sources in deps/; no network access, Homebrew
+	or XQuartz is needed. Requires the Xcode Command Line Tools and
+	CMake.
+
+Date:
+
+	November 24, 2026

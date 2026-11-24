@@ -22,6 +22,7 @@ config/$(name)/status src/h/define.h:
 	:
 	:	make Configure name=xxxx     [for no graphics]
 	: or	make X-Configure name=xxxx   [with X-Windows graphics]
+	: or	make SDL-Configure name=xxxx [with SDL3 graphics; icon-sdl fork]
 	:
 	: where xxxx is one of
 	:
@@ -45,6 +46,12 @@ X-Configure:	config/$(name)/status
 		$(MAKE) Pure >/dev/null
 		cd config; sh setup.sh $(name) Graphics
 
+SDL-Configure:	config/$(name)/status
+		@grep -q SDLGraphics config/$(name)/define.h || \
+		   { echo "$(name) is not an SDL configuration"; exit 1; }
+		$(MAKE) Pure >/dev/null
+		cd config; sh setup.sh $(name) Graphics
+
 
 # Get the status information for a specific system.
 
@@ -65,6 +72,7 @@ Icont bin/icont: src/h/define.h
 		cd src/common;		$(MAKE)
 		cd src/rtt;		$(MAKE)
 		cd src/icont;		$(MAKE)
+		cd src/sdl;		$(MAKE)
 		cd src/runtime;		$(MAKE) 
 
 

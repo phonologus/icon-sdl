@@ -29,7 +29,7 @@ procedure main()
    every insert(f := set(), &features)
    every delete(f, "UNIX" | "Macintosh" | "MS Windows" | "Cygwin" | "Haiku") # platform ID
    every delete(f, "dynamic loading" | "external values")	# may be absent
-   every delete(f, "graphics" | "X Windows")			# may be absent
+   every delete(f, "graphics" | "X Windows" | "SDL graphics")	# may be absent
    every kw("features", member(f, &features))
 
    every kw("input", &input | "[failed]")

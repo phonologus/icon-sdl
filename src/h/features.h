@@ -71,3 +71,7 @@
 #ifdef XWindows
    Feature(1, "_X_WINDOW_SYSTEM", "X Windows")
 #endif					/* XWindows */
+
+#ifdef SDLGraphics
+   Feature(1, "_SDL_GRAPHICS", "SDL graphics")
+#endif					/* SDLGraphics */

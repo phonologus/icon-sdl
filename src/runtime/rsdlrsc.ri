@@ -1,0 +1,112 @@
+/*
+ * File: rsdlrsc.ri - SDL3 + Blend2D resource allocation/deallocation
+ * (icon-sdl fork; MIT licence, see LICENSE.md).
+ *
+ * Contexts and window states are reference counted and linked into the
+ * global chains (wcntxts, wstates) exactly as in rxrsc.ri. Colours are
+ * plain RGB values in the context, so there is no colormap to manage.
+ */
+
+/*
+ * The default font until the backend resolves real fonts: X's "fixed"
+ * metrics, so that text layout code has sane values.
+ */
+static wfont sdl_deffont = { 1, 0, NULL, NULL, "fixed", 11, 2, 13, 6, NULL };
+
+/*
+ * allocate a context
+ */
+wcp alc_context(wbp w)
+   {
+   wcp wc;
+
+   GRFX_ALLOC(wc, _wcontext);
+   wc->serial = ++context_serial;
+   wc->fg = 0x000000;
+   strcpy(wc->fgname, "black");
+   wc->bg = 0xFFFFFF;
+   strcpy(wc->bgname, "white");
+   wc->font = &sdl_deffont;
+   sdl_deffont.refcount++;
+   wc->leading = sdl_deffont.height;
+   wc->drawop = DRAWOP_COPY;
+   wc->gamma = GammaCorrection;
+   wc->clipx = wc->clipy = 0;
+   wc->clipw = wc->cliph = -1;
+   wc->linestyle = LS_SOLID;
+   wc->linewidth = 1;
+   wc->fillstyle = FS_SOLID;
+   GRFX_LINK(wc, wcntxts);
+   return wc;
+   }
+
+/*
+ * allocate a context, cloning attributes from an existing context
+ */
+wcp clone_context(wbp w)
+   {
+   wcp wc, rv;
+
+   wc = w->context;
+   Protect(rv = alc_context(w), return NULL);
+   rv->dx = wc->dx;
+   rv->dy = wc->dy;
+   rv->clipx = wc->clipx;
+   rv->clipy = wc->clipy;
+   rv->clipw = wc->clipw;
+   rv->cliph = wc->cliph;
+   rv->fg = wc->fg;
+   strcpy(rv->fgname, wc->fgname);
+   rv->bg = wc->bg;
+   strcpy(rv->bgname, wc->bgname);
+   rv->font->refcount--;
+   rv->font = wc->font;
+   rv->font->refcount++;
+   rv->leading = wc->leading;
+   rv->fillstyle = wc->fillstyle;
+   rv->linestyle = wc->linestyle;
+   rv->linewidth = wc->linewidth;
+   rv->drawop = wc->drawop;
+   rv->gamma = wc->gamma;
+   rv->bits = wc->bits;
+   return rv;
+   }
+
+/*
+ * allocate a window state structure
+ */
+wsp alc_winstate()
+   {
+   wsp ws;
+
+   GRFX_ALLOC(ws, _wstate);
+   ws->serial = ++canvas_serial;
+   ws->bits = 1024;				/* echo ON; others OFF */
+   ws->filep = nulldesc;
+   ws->listp = nulldesc;
+   ws->iconic = NormalState;
+   ws->posx = ws->posy = -(MaxInt);
+   GRFX_LINK(ws, wstates);
+   return ws;
+   }
+
+/*
+ * free a window state
+ */
+int free_window(wsp ws)
+   {
+   ws->refcount--;
+   if (ws->refcount == 0)
+      GRFX_UNLINK(ws, wstates);
+   return 0;
+   }
+
+/*
+ * free a window context
+ */
+void free_context(wcp wc)
+   {
+   wc->refcount--;
+   if (wc->refcount == 0)
+      GRFX_UNLINK(wc, wcntxts);
+   }
