@@ -192,12 +192,17 @@ static inline uint32_t gx(int op, uint32_t s, uint32_t d)
    return OPAQUE | (r & 0xFFFFFF);
 }
 
-/* The device rectangle an operation may touch: the logical bounding box
- * (plus a stroke margin), clipped to the clip rectangle and the canvas. */
+/*
+ * The device rectangle an operation may touch: the logical box [x0, x1)
+ * by [y0, y1), widened by margin m on every side, clipped to the clip
+ * rectangle and the canvas. Exact areas (erase, copy, images, points)
+ * pass m = 0; strokes pass STROKE_MARGIN, enough for caps and joins.
+ */
+#define STROKE_MARGIN(gc) (((gc)->linewidth > 1 ? (gc)->linewidth : 1) + 1.0)
+
 static int region(Canvas *c, const sdlgc *gc, double x0, double y0,
-   double x1, double y1, int r[4])
+   double x1, double y1, double m, int r[4])
 {
-   double m = gc ? (gc->linewidth > 1 ? gc->linewidth : 1) + 1 : 0;
    int cx0 = 0, cy0 = 0, cx1 = c->w, cy1 = c->h;
 
    x0 -= m; y0 -= m; x1 += m; y1 += m;
@@ -234,7 +239,24 @@ static void mask_clear(Canvas *c, const int r[4])
  * fill pattern), 1 = background (the off dashes of a striped line).
  * blend: antialiased copy of fg by coverage (plain text only).
  */
+/*
+ * Row spans: for strokes, the part of each device row of r that the
+ * stroke can touch, so that clearing and combining cost in proportion to
+ * the line's length rather than its bounding box's area. sa[i], sb[i]
+ * bound row r[1] + i; sa >= sb means the row is untouched.
+ */
+static int *sa, *sb, nspan;
+
+static void apply_rows(Canvas *c, const sdlgc *gc, const int r[4], int which,
+   int blend, const int *ra, const int *rb);
+
 static void apply(Canvas *c, const sdlgc *gc, const int r[4], int which, int blend)
+{
+   apply_rows(c, gc, r, which, blend, NULL, NULL);
+}
+
+static void apply_rows(Canvas *c, const sdlgc *gc, const int r[4], int which,
+   int blend, const int *ra, const int *rb)
 {
    BLImageData id, md;
    uint32_t fg, bg;
@@ -251,7 +273,8 @@ static void apply(Canvas *c, const sdlgc *gc, const int r[4], int which, int ble
       uint32_t *p = (uint32_t *)((uint8_t *)id.pixel_data + y * id.stride);
       const uint8_t *m = (const uint8_t *)md.pixel_data + y * md.stride;
       int ly = y / s;
-      for (int x = r[0]; x < r[2]; x++) {
+      int xa = ra ? ra[y - r[1]] : r[0], xb = rb ? rb[y - r[1]] : r[2];
+      for (int x = xa; x < xb; x++) {
          uint32_t src;
          if (m[x] == 0 || (!blend && m[x] < 128))
             continue;
@@ -295,7 +318,7 @@ static void shape(Canvas *c, const sdlgc *gc, BLGeometryType type, const void *d
    int stroke, double x0, double y0, double x1, double y1)
 {
    int r[4];
-   if (!region(c, gc, x0, y0, x1, y1, r))
+   if (!region(c, gc, x0, y0, x1, y1, STROKE_MARGIN(gc), r))
       return;
    mask_clear(c, r);
    if (stroke) {
@@ -313,6 +336,80 @@ static void shape(Canvas *c, const sdlgc *gc, BLGeometryType type, const void *d
  * 3 * width otherwise (as Icon sets them), continuing across vertices.
  * Striped lines draw the off dashes in the background colour.
  */
+/*
+ * Compute the row spans of a stroked polyline within r into sa/sb:
+ * for each device row, the x range within e (half the line width, with
+ * room for square caps and antialiasing) of some segment.
+ */
+static void spans_add(Canvas *c, const sdlgc *gc, const BLPoint *p, int n, const int r[4]);
+
+static int spans(Canvas *c, const sdlgc *gc, const BLPoint *p, int n, const int r[4])
+{
+   int rows = r[3] - r[1];
+
+   if (rows > nspan) {
+      int *na = realloc(sa, rows * sizeof *sa), *nb;
+      if (!na) return 0;
+      sa = na;
+      nb = realloc(sb, rows * sizeof *sb);
+      if (!nb) return 0;
+      sb = nb;
+      nspan = rows;
+   }
+   for (int i = 0; i < rows; i++) {
+      sa[i] = r[2];
+      sb[i] = r[0];
+   }
+   spans_add(c, gc, p, n, r);
+   return 1;
+}
+
+/* Add a polyline's spans to sa/sb. */
+static void spans_add(Canvas *c, const sdlgc *gc, const BLPoint *p, int n, const int r[4])
+{
+   int s = c->s;
+   double e = (gc->linewidth > 1 ? gc->linewidth : 1) * 0.75 + 1.5;
+
+   for (int i = 0; i + 1 < n; i++) {
+      double X0 = p[i].x, Y0 = p[i].y, X1 = p[i + 1].x, Y1 = p[i + 1].y;
+      double dx = X1 - X0, dy = Y1 - Y0;
+      double ylo = fmin(Y0, Y1), yhi = fmax(Y0, Y1);
+      double xlo = fmin(X0, X1) - e, xhi = fmax(X0, X1) + e;
+      double slope = fabs(dy) > 1e-9 ? dx / dy : 0;
+      double hw = fabs(dy) > 1e-9 ? e * hypot(dx, dy) / fabs(dy) + fabs(slope) / s : 0;
+      int ya = (int)floor((ylo - e) * s), yb = (int)ceil((yhi + e) * s);
+      if (ya < r[1]) ya = r[1];
+      if (yb > r[3]) yb = r[3];
+      for (int y = ya; y < yb; y++) {
+         double lo = xlo, hi = xhi;
+         if (fabs(dy) > 1e-9) {
+            double yc = (y + 0.5) / s;
+            double xc = X0 + (fmin(fmax(yc, ylo), yhi) - Y0) * slope;
+            lo = fmax(lo, xc - hw);
+            hi = fmin(hi, xc + hw);
+         }
+         int a = (int)floor(lo * s) - 1, b = (int)ceil(hi * s) + 1;
+         if (a < r[0]) a = r[0];
+         if (b > r[2]) b = r[2];
+         if (a < sa[y - r[1]]) sa[y - r[1]] = a;
+         if (b > sb[y - r[1]]) sb[y - r[1]] = b;
+      }
+   }
+}
+
+/* Clear the mask over the row spans. */
+static void mask_clear_rows(Canvas *c, const int r[4])
+{
+   BLImageData md;
+   bl_context_flush(&c->mctx, BL_CONTEXT_FLUSH_SYNC);
+   bl_image_get_data(&c->mask, &md);
+   for (int y = r[1]; y < r[3]; y++) {
+      int a = sa[y - r[1]], b = sb[y - r[1]];
+      if (a < b)
+         memset((uint8_t *)md.pixel_data + y * md.stride + a, 0, (size_t)(b - a));
+   }
+}
+
 static void polyline(Canvas *c, const sdlgc *gc, const BLPoint *p, int n,
    double x0, double y0, double x1, double y1)
 {
@@ -320,7 +417,9 @@ static void polyline(Canvas *c, const sdlgc *gc, const BLPoint *p, int n,
    double len, phase = 0;
    int r[4];
 
-   if (n < 2 || !region(c, gc, x0, y0, x1, y1, r))
+   if (n < 2 || !region(c, gc, x0, y0, x1, y1, STROKE_MARGIN(gc), r))
+      return;
+   if (!spans(c, gc, p, n, r))
       return;
    bl_path_init(&on);
    if (gc->linestyle == 0) {
@@ -329,10 +428,10 @@ static void polyline(Canvas *c, const sdlgc *gc, const BLPoint *p, int n,
          bl_path_line_to(&on, p[i].x, p[i].y);
       if (n > 2 && p[0].x == p[n - 1].x && p[0].y == p[n - 1].y)
          bl_path_close(&on);
-      mask_clear(c, r);
+      mask_clear_rows(c, r);
       stroke_setup(c, gc, BL_STROKE_CAP_SQUARE);
       bl_context_stroke_geometry_rgba32(&c->mctx, BL_GEOMETRY_TYPE_PATH, &on, 0xFFFFFFFFu);
-      apply(c, gc, r, 0, 0);
+      apply_rows(c, gc, r, 0, 0, sa, sb);
       bl_path_destroy(&on);
       return;
    }
@@ -363,16 +462,16 @@ static void polyline(Canvas *c, const sdlgc *gc, const BLPoint *p, int n,
       bl_path_move_to(&all, p[0].x, p[0].y);
       for (int i = 1; i < n; i++)
          bl_path_line_to(&all, p[i].x, p[i].y);
-      mask_clear(c, r);
+      mask_clear_rows(c, r);
       stroke_setup(c, gc, BL_STROKE_CAP_SQUARE);
       bl_context_stroke_geometry_rgba32(&c->mctx, BL_GEOMETRY_TYPE_PATH, &all, 0xFFFFFFFFu);
-      apply(c, gc, r, 1, 0);
+      apply_rows(c, gc, r, 1, 0, sa, sb);
       bl_path_destroy(&all);
    }
-   mask_clear(c, r);
+   mask_clear_rows(c, r);
    stroke_setup(c, gc, gc->linestyle == 2 ? BL_STROKE_CAP_BUTT : BL_STROKE_CAP_SQUARE);
    bl_context_stroke_geometry_rgba32(&c->mctx, BL_GEOMETRY_TYPE_PATH, &on, 0xFFFFFFFFu);
-   apply(c, gc, r, 0, 0);
+   apply_rows(c, gc, r, 0, 0, sa, sb);
    bl_path_destroy(&on);
    bl_path_destroy(&off);
 }
@@ -393,9 +492,7 @@ void cv_points(void *cv, const sdlgc *gc, const int *xy, int n)
    Canvas *c = cv;
    for (int i = 0; i < n; i++) {
       int r[4], x = xy[2 * i], y = xy[2 * i + 1];
-      sdlgc g = *gc;
-      g.linewidth = 0;
-      if (!region(c, &g, x + 1, y + 1, x, y, r))	/* no margin: m = 1 */
+      if (!region(c, gc, x, y, x + 1, y + 1, 0, r))
          continue;
       r[0] = x * c->s; r[1] = y * c->s; r[2] = r[0] + c->s; r[3] = r[1] + c->s;
       if (gc->clipw >= 0 && (x < gc->clipx || y < gc->clipy ||
@@ -432,10 +529,11 @@ void cv_lines(void *cv, const sdlgc *gc, const int *xy, int n)
    free(p);
 }
 
-void cv_segments(void *cv, const sdlgc *gc, const int *s, int n)
+/* DrawSegment: each segment separately, as X does. */
+void cv_segments(void *cv, const sdlgc *gc, const int *sg, int n)
 {
    for (int i = 0; i < n; i++)
-      cv_lines(cv, gc, s + 4 * i, 2);
+      cv_lines(cv, gc, sg + 4 * i, 2);
 }
 
 void cv_rects(void *cv, const sdlgc *gc, const int *r, int n)
@@ -523,10 +621,8 @@ void cv_fillpoly(void *cv, const sdlgc *gc, const int *xy, int n)
 void cv_erase(void *cv, const sdlgc *gc, int x, int y, int w, int h)
 {
    Canvas *c = cv;
-   sdlgc g = *gc;
    int r[4];
-   g.drawop = 3; g.reverse = 0; g.fillstyle = 0; g.linewidth = 0;
-   if (!region(c, &g, x + 1, y + 1, x + w - 1, y + h - 1, r))
+   if (!region(c, gc, x, y, x + w, y + h, 0, r))
       return;
    fill_device(c, r[0], r[1], r[2], r[3], OPAQUE | gc->bg);
    touch(c, r[0], r[1], r[2], r[3]);
@@ -554,8 +650,7 @@ void cv_copy(void *srcp, void *dstp, const sdlgc *gc,
    if (y + h > src->h) h = src->h - y;
    if (w <= 0 || h <= 0)
       return;
-   g.linewidth = 0;
-   if (!region(dst, &g, x2 + 1, y2 + 1, x2 + w - 1, y2 + h - 1, r))
+   if (!region(dst, &g, x2, y2, x2 + w, y2 + h, 0, r))
       return;
 
    /* take a copy of the source region first (overlap) */
@@ -608,9 +703,7 @@ void cv_write(void *cv, const sdlgc *gc, int x, int y, int w, int h,
    Canvas *c = cv;
    BLImageData d;
    int r[4], s = c->s;
-   sdlgc g = *gc;
-   g.linewidth = 0;
-   if (!region(c, &g, x + 1, y + 1, x + w - 1, y + h - 1, r))
+   if (!region(c, gc, x, y, x + w, y + h, 0, r))
       return;
    bl_image_make_mutable(&c->img, &d);
    for (int dy = r[1]; dy < r[3]; dy++) {
@@ -766,8 +859,7 @@ void cv_text(void *cv, const sdlgc *gc, void *fp, int x, int y,
       g.drawop = 3; g.reverse = 0; g.fillstyle = 0;
       cv_erase(c, &g, x, y - f->ascent, w, f->ascent + f->descent);
    }
-   g.linewidth = 0;
-   if (!region(c, &g, x - f->maxw, y - f->ascent - 1, x + w + f->maxw, y + f->descent + 1, r))
+   if (!region(c, &g, x - f->maxw, y - f->ascent - 1, x + w + f->maxw, y + f->descent + 1, 0, r))
       return;
    u = latin1_to_utf8(s, n, &len);
    if (!u)

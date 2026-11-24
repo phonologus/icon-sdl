@@ -1,0 +1,27 @@
+# Reference test: exact boundaries. One-pixel frames in distinct colours
+# surround areas that are then erased, copied into, or drawn into with
+# DrawImage, exactly inside the frames (as a VIB region's border
+# surrounds its usable area). Nothing may touch the frames.
+procedure frame(x, y, w, h)
+   Fg("red"); DrawLine(x - 1, y - 1, x + w, y - 1)		# top
+   Fg("green"); DrawLine(x - 1, y + h, x + w, y + h)		# bottom
+   Fg("blue"); DrawLine(x - 1, y, x - 1, y + h - 1)		# left
+   Fg("orange"); DrawLine(x + w, y, x + w, y + h - 1)		# right
+end
+
+procedure main(args)
+   &window := open("ref", "g", "canvas=hidden", "size=200,120", "bg=pale gray") |
+      stop("cannot open window")
+   Fg("black"); FillRectangle(0, 0, 200, 120)
+   frame(10, 10, 40, 30)
+   frame(70, 10, 40, 30)
+   frame(130, 10, 40, 30)
+   frame(10, 60, 40, 30)
+   Bg("white")
+   EraseArea(10, 10, 40, 30)
+   Fg("purple"); FillRectangle(0, 100, 60, 20)
+   CopyArea(0, 100, 40, 30, 70, 10)
+   DrawImage(130, 10, "40,g2," || repl("01", 600))
+   Clip(10, 60, 40, 30); Bg("yellow"); EraseArea(); Clip()
+   WriteImage(args[1]) | stop("cannot write ", args[1])
+end

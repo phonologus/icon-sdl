@@ -482,7 +482,7 @@ Results with hidden canvases (2026-11-24):
 
 | Test | Result |
 |---|---|
-| `drawops`, `images`, `patterns` | pixel-identical; `Pixel()` output identical |
+| `drawops`, `images`, `patterns`, `bounds` | pixel-identical; `Pixel()` output identical |
 | `lines` | 7 pixels differ: corners of even-width line caps, where coverage and "centre inside" disagree |
 | `shapes` | 50 pixels differ: edge pixels of filled circles and slanted 1-pixel outlines |
 | `clipcopy` | 22 pixels differ: X's own algorithm for thin arcs |
@@ -583,3 +583,41 @@ through `keysyms.icn`, so this is covered.
 Only these four IPL files test `_X_WINDOW_SYSTEM`. The fourth,
 `gprocs/viface.icn`, chooses X font names, which correctly doesn't apply
 to SDL.
+
+## Fixes from first use (2026-11-24)
+
+- **`EraseArea` touched one pixel too many on every side.** It overwrote
+  the border of a VIB region whose usable area was being erased. The
+  helper that computes an operation's area added a stroke margin even for
+  exact areas. `region()` now takes the margin explicitly: zero for
+  erase, copy, image writes and points. The `bounds` reference test pins
+  these edges with zero tolerance. (`clipcopy`'s tolerance had absorbed
+  the error.)
+- **`CopyArea` now follows rxwin.ri exactly.** It always copies (X sets
+  the GC function to `GXcopy` for it, so `drawop` does not apply). Any
+  part of the source beyond its canvas is filled with the destination's
+  background, after the copy.
+
+## Performance
+
+Strokes used to clear and combine the mask over their whole bounding
+box, so a long diagonal line cost in proportion to its box's area: about
+27 µs per random long segment on a hidden canvas, and 92 µs in a 2×
+window. Strokes now work row by row: `spans()` computes, for each device
+row, the x range within reach of the stroke (half its width, plus room
+for square caps and antialiasing), and only those spans are cleared and
+combined. The pixels are identical. Measured on a 1363×759 window:
+
+| | before | after |
+|---|---|---|
+| 10,000 long random diagonals, hidden | 270 ms | 40 ms |
+| 10,000 long random diagonals, 2× window | 920 ms | 130 ms |
+| 2,500 dashed segments, 2× window | 260 ms | 60 ms |
+| 25,000 short segments, 2× window | — | 40 ms |
+
+Drawing all the segments of one `DrawSegment` call as a single path (safe
+for drawops where overlaps don't matter) was tried and rejected. The
+spans of scattered segments merge into nearly full-width rows, which made
+it three times slower than drawing them one by one. The interpreter's
+speed with a window open equals upstream's: `pollevent()` costs nothing
+measurable.

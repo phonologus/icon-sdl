@@ -597,14 +597,58 @@ void eraseArea(wbp w, int x, int y, int width, int height)
    }
 
 /*
- * copyArea() - copy from w's canvas to w2's, with w2's drawop and clip.
+ * copyArea() - copy from w's canvas to w2's, as rxwin.ri does: always in
+ * copy mode (whatever w2's drawop), within w2's clip, and with any part
+ * of the source beyond its canvas filled with w2's background colour
+ * (after copying, in case source and destination overlap).
  */
 int copyArea(wbp w, wbp w2, int x, int y, int width, int height, int x2, int y2)
    {
+   wsp ws1 = w->window;
    sdlgc g;
+   int lpad, rpad, tpad, bpad;
+
    if (!CANVAS(w) || !CANVAS(w2)) return Failed;
    mkgc(w2, &g);
+   g.drawop = DRAWOP_COPY;
+   g.reverse = 0;
+   g.fillstyle = FS_SOLID;
+
+   if (x + width < 0 || y + height < 0 || x >= ws1->pixwidth ||
+       y >= ws1->pixheight) {		/* source entirely off the canvas */
+      cv_erase(CANVAS(w2), &g, x2, y2, width, height);
+      return Succeeded;
+      }
+   lpad = rpad = tpad = bpad = 0;
+   if (x < 0) {
+      lpad = -x;
+      width -= lpad;
+      x2 += lpad;
+      x = 0;
+      }
+   if (x + width > ws1->pixwidth) {
+      rpad = x + width - ws1->pixwidth;
+      width -= rpad;
+      }
+   if (y < 0) {
+      tpad = -y;
+      height -= tpad;
+      y2 += tpad;
+      y = 0;
+      }
+   if (y + height > ws1->pixheight) {
+      bpad = y + height - ws1->pixheight;
+      height -= bpad;
+      }
    cv_copy(CANVAS(w), CANVAS(w2), &g, x, y, width, height, x2, y2);
+   if (lpad > 0)
+      cv_erase(CANVAS(w2), &g, x2 - lpad, y2 - tpad, lpad, tpad + height + bpad);
+   if (rpad > 0)
+      cv_erase(CANVAS(w2), &g, x2 + width, y2 - tpad, rpad, tpad + height + bpad);
+   if (tpad > 0)
+      cv_erase(CANVAS(w2), &g, x2, y2 - tpad, width, tpad);
+   if (bpad > 0)
+      cv_erase(CANVAS(w2), &g, x2, y2 + height, width, bpad);
    return Succeeded;
    }
 
