@@ -1,11 +1,19 @@
 # Window test: events as Icon sees them. Run by run.sh with a scripted
 # input sequence (ICONSDL_TEST_EVENTS); see events.std for X's answers.
+# Special keys are also named through the IPL's keysyms.icn.
+$include "keysyms.icn"
+
 procedure main()
    &window := open("events", "g", "size=200,100") | stop("cannot open window")
    repeat {
       e := Event()
       s := image(e)
       if integer(e) < 0 then s ||:= " at " || &x || "," || &y
+      case e of {
+         Key_Left: s ||:= " Key_Left"
+         Key_Up: s ||:= " Key_Up"
+         Key_F1: s ||:= " Key_F1"
+         }
       s ||:= " [" || ((&shift, "S") | "") || ((&control, "C") | "") ||
          ((&meta, "M") | "") || "]"
       write(s)

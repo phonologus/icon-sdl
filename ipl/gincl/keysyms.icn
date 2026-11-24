@@ -23,7 +23,17 @@
 #
 ############################################################################
 
+# _X_KEYSYMS: keys are reported as X keysyms. That is so under X, and
+# also with the SDL graphics backend of the icon-sdl fork, which reports
+# keys exactly as X does.
 $ifdef _X_WINDOW_SYSTEM
+$define _X_KEYSYMS
+$endif
+$ifdef _SDL_GRAPHICS
+$define _X_KEYSYMS
+$endif
+
+$ifdef _X_KEYSYMS
 $define Key_Compose		65312
 $define Key_Do			65383
 $define Key_Down		65364

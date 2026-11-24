@@ -563,3 +563,23 @@ translation as real input.
 - A hidden canvas shown later keeps scale 1, so it is pixel-doubled on
   Retina.
 - Linux: fontconfig font lookup and a `linux-sdl` configuration.
+
+## Keysyms in the IPL
+
+Programs get key names such as `Key_Left` from the IPL's
+`gincl/keysyms.icn`, which defined X's values only under
+`$ifdef _X_WINDOW_SYSTEM`. With SDL graphics they were undefined: an error
+with `icont -u` (as `vib` builds), and otherwise a silent `&null` global.
+Our backend reports X's keysyms, so `keysyms.icn` now defines a helper
+symbol `_X_KEYSYMS` under either `_X_WINDOW_SYSTEM` or `_SDL_GRAPHICS`
+and guards the X table with it. `gprocs/vtext.icn` and
+`gpacks/tiger/tgrmap.icn` alias the keypad arrows to the plain arrows
+when there are no X keysyms, and now test `_X_KEYSYMS` too: Icon's
+preprocessor rejects a redefinition with a different value. Under X
+nothing changes (checked in the VM: `make Ilib`, `vib`, `tgrmap`, the test
+suite, and the reference output). The `events` window test names keys
+through `keysyms.icn`, so this is covered.
+
+Only these four IPL files test `_X_WINDOW_SYSTEM`. The fourth,
+`gprocs/viface.icn`, chooses X font names, which correctly doesn't apply
+to SDL.

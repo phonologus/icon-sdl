@@ -55,7 +55,7 @@ New files:
   (`sdl/vm/`, Debian under QEMU, fully pinned); and reference graphics
   tests with their expected X11 outputs (`sdl/tests/ref/`).
 
-Modified upstream files. Each change only adds an `SDLGraphics` case,
+Modified upstream files. Each change only adds an SDL graphics case,
 except the test:
 
 - `Makefile`: the `SDL-Configure` target, its usage line, and building
@@ -76,6 +76,11 @@ except the test:
   relinked when `libiconsdl.a` changes.
 - `tests/general/kwds.icn`: also ignore the optional feature
   "SDL graphics", as it already ignores "graphics" and "X Windows".
+- `ipl/gincl/keysyms.icn`: the X keysym names (`Key_Left` and so on) are
+  defined when `_X_KEYSYMS` is, which is defined under X (as before) and
+  with SDL graphics, which reports keys as X keysyms.
+  `ipl/gprocs/vtext.icn` and `ipl/gpacks/tiger/tgrmap.icn` test
+  `_X_KEYSYMS` instead of `_X_WINDOW_SYSTEM` for the same reason.
 
 ## Licence
 
