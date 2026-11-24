@@ -268,23 +268,20 @@ The counts are the line counts of the X implementation.
 | `setfont`, `getfntnam`, `alc_font` (58), `findfont` (93), `tryfont`, `okfont`, `fontcmp`, `fieldcmp`, `xlfd_field`, `xlfd_size` | X's XLFD font matching is replaced by `parsefont` (portable) → CoreText or fontconfig → Blend2D face. |
 | `alc_display` (127), `free_display` | One global SDL "display". |
 
-### Decisions needed
+### Decisions (agreed 2026-11-24)
 
-1. **Mutable colours** (`NewColor`, `Color` with a mutable index). Either
-   `NewColor` fails, or we emulate mutable colours by tracking the pixels
-   that use each entry. The X code already fails when it can't get a
-   colour cell, even after falling back to a virtual colormap
-   (`mutable_color`), which TrueColor X servers can't provide. So failing
-   is existing behaviour. Suggest: fail for now.
-2. **XBM/XPM images.** Suggest: drop at first, since PNG, JPEG and GIF
-   cover practice. Add a small XBM reader later if IPL programs need it.
-3. **Gamma.** Use 2.5 like X, which gives pixel-identical output against
-   the X reference? Or 1.0 / sRGB, which is closer to modern displays? This
-   affects every colour. Suggest 2.5 to start, since it makes the
-   reference comparison possible.
-4. **`&meta` on macOS:** Option or Command? XQuartz maps Option to `Mod1`
-   by default. Suggest Option, with Command available through a setting.
-5. **Antialiasing.** X draws aliased; Blend2D always antialiases. At 2×
-   with pixel-centred strokes, axis-aligned shapes match exactly, but
-   diagonals and arcs won't be pixel-identical. Suggest: accept it, and
-   compare geometry against the reference with a tolerance.
+1. **Mutable colours:** `NewColor` fails, for now. The X code already
+   fails when it can't get a colour cell, even after falling back to a
+   virtual colormap (`mutable_color`), which TrueColor X servers can't
+   provide. So failing is existing behaviour. Emulating them, by tracking
+   the pixels that use each entry, stays possible later.
+2. **XBM/XPM images:** dropped at first. GIF stays (portable code), and
+   PNG, JPEG and BMP come from Blend2D. A small XBM reader can be added
+   later if IPL programs need it.
+3. **Gamma:** 2.5, like X, so that output can be compared pixel for pixel
+   against the X11 reference.
+4. **`&meta` on macOS:** the Option key, as XQuartz maps it; Command
+   available through a setting.
+5. **Antialiasing:** accepted. Axis-aligned shapes match X exactly at
+   integer scale. Diagonals and arcs are compared against the reference
+   with a tolerance.
