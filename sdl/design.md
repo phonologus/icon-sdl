@@ -138,7 +138,7 @@ built offline from these exact tarballs, in about 30 s.
    and the build integration. Done for macOS; see "The macintosh-sdl
    configuration" below.
 4. Port the canvas and platform layers from the prototype into
-   `src/runtime`.
+   `src/runtime`. Done; see "The canvas layer" and "The platform layer".
 
 ## Backend inventory
 
@@ -488,3 +488,74 @@ The `Pixel()` output compares exactly only because a colour reads back
 the same on both sides. The probe that found the gamma used the fact
 that a pixel the colour table doesn't know reads back as its 8-bit value
 × 257 through gamma, which can be inverted to see the raw pixel.
+
+## The platform layer (src/sdl/plat.c)
+
+With `SDLGraphics`, iconx's `main()` (`imain.r`) calls `pl_main(iconx,
+...)`. That runs the interpreter on a new thread with a stack as large as
+the main thread's (the stack rlimit, at least 8 MB), and serves it from
+the main thread:
+
+- **Before the first window,** the main thread waits on a condition
+  variable. Programs without windows never start SDL, and `pollevent()`
+  returns at once while no window is open.
+- **The first request starts SDL.** From then on the main thread waits in
+  `SDL_WaitEvent`, and requests (open, close, present, title, geometry,
+  state, cursor, warp) arrive as SDL user events. Each is synchronous:
+  the Icon thread waits for it.
+- **Events are translated on the main thread and queued:**
+  - characters with shift and control applied, as `XLookupString` gives
+    them;
+  - X keysyms for other keys (`Key_Left` = 65361 and so on);
+  - X modifier masks;
+  - times in milliseconds;
+  - button presses and releases, motion, resizes, moves, state changes,
+    exposes and close requests.
+
+  `pollevent()` and `wgetq()` move the queued events into the windows'
+  Icon event lists (`qevent`), following rxwin.ri:
+  - a drag reports the most recently pressed button, as X does;
+  - a resize grows the canvas and queues `&resize`;
+  - closing a window from its title bar raises run-time error 141.
+- **Presenting:** a window shows its canvas through a streaming texture
+  updated with the canvas's dirty rectangle. This happens at most 60
+  times a second from `pollevent()`, and always before `wgetq()` waits
+  and on `WFlush()`/`WSync()`.
+- **`&meta` is the Option key,** or Command with `ICONSDL_META=command`.
+
+Windows are drawn at the display's scale (2 on Retina) for sharp output;
+`ICONSDL_SCALE=1` forces 1×. At 1×, a visible window's pixels are
+identical to a hidden canvas's, and so to X's. At 2×, edge pixels of
+diagonals, arcs and text read back slightly differently through
+`Pixel()`/`WriteImage()`: 277 of 60,000 pixels in
+`sdl/tests/win/window.icn`.
+
+### Window tests
+
+    sdl/tests/win/run.sh ICONDIR
+
+These open real windows briefly, so they need a display. `plat.c` has a
+test hook: if `ICONSDL_TEST_EVENTS` is set, the first window to open is
+sent a scripted sequence of key presses, mouse events and a close
+request, pushed into SDL's queue so they go through the same
+translation as real input.
+
+| Test | Checks |
+|---|---|
+| `events` | characters, control and shift, X keysyms, buttons, drags (including X's most-recent-button rule), `&meta`, against X's answers |
+| `window` | at 1×, a visible window's pixels equal a hidden canvas's; resize, hide and show, label, display size |
+| `coexp` | a co-expression (a thread with a 16 KB stack) opens a window, loads a font, draws and reads events; the main program then uses it |
+| `close` | the close box ends the program with error 141, as with X |
+
+### Not yet done
+
+- The text cursor (`WAttrib("cursor=on")`) isn't drawn.
+- X colour names beyond Icon's own (`rgb.txt` names such as
+  `LightSlateGray`): `nativecolor()` fails.
+- `Lower()`: SDL cannot lower a window. `Alert()`: SDL has no beep.
+- Icon images and icon labels (`iconimage=`, `iconlabel=`) are ignored.
+- Keypad keys report their characters; keypad-specific keysyms are not
+  distinguished.
+- A hidden canvas shown later keeps scale 1, so it is pixel-doubled on
+  Retina.
+- Linux: fontconfig font lookup and a `linux-sdl` configuration.

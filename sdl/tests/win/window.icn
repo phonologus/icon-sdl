@@ -1,0 +1,43 @@
+# Window test: a visible window (at the display's scale) draws exactly
+# what a hidden canvas does, as Icon sees the pixels; and it can be
+# resized, hidden and shown again.
+procedure draw(w)
+   Fg(w, "blue"); FillRectangle(w, 10, 10, 50, 30)
+   Fg(w, "red"); DrawCircle(w, 100, 50, 30)
+   Fg(w, "black"); DrawLine(w, 0, 0, 299, 199)
+   WAttrib(w, "drawop=reverse"); FillRectangle(w, 40, 20, 100, 60)
+   WAttrib(w, "drawop=copy")
+   DrawString(w, 20, 150, "Hello")
+end
+
+procedure pixels(w)
+   s := ""
+   every s ||:= Pixel(w, 0, 0, 300, 200) || ";"
+   return s
+end
+
+procedure main()
+   v := open("window", "g", "size=300,200") | stop("cannot open window")
+   h := open("hidden", "g", "size=300,200", "canvas=hidden") |
+      stop("cannot open canvas")
+   write("canvas: ", WAttrib(v, "canvas"), " size ", WAttrib(v, "size"))
+   draw(v)
+   draw(h)
+   write("pixels same as hidden canvas: ",
+      if pixels(v) == pixels(h) then "yes" else "NO")
+   WAttrib(v, "size=400,250")
+   write("resized: ", WAttrib(v, "size"))
+   WAttrib(v, "canvas=hidden")
+   write("hidden: ", WAttrib(v, "canvas"))
+   WAttrib(v, "canvas=normal")
+   write("shown: ", WAttrib(v, "canvas"))
+   write("drawing kept: ", if Pixel(v, 20, 15, 1, 1) == Pixel(h, 20, 15, 1, 1)
+      then "yes" else "NO")
+   WAttrib(v, "label=renamed")
+   write("label: ", WAttrib(v, "label"))
+   write("display: ", if WAttrib(v, "displaywidth") > 0 then "has a size"
+      else "NO SIZE")
+   close(v)
+   close(h)
+   write("done")
+end

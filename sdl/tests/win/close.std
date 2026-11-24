@@ -1,0 +1,8 @@
+
+Run-time error 141
+File close.icn; Line 5
+program terminated by window manager
+Traceback:
+main()
+Event() from line 5 in close.icn
+exit status 1

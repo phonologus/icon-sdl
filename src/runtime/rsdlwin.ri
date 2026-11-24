@@ -11,9 +11,10 @@
  * Each window state owns a canvas (the pixels, the equivalent of X's
  * backing pixmap). Drawing goes to the canvas; a visible window shows it.
  *
- * STATUS: hidden canvases (canvas=hidden) are complete. Visible windows,
- * events and the platform layer are not yet ported: opening a visible
- * window fails.
+ * A window state with a window also has a platform window (src/sdl
+ * plat.c), which shows the canvas; the platform layer runs SDL on the
+ * process's main thread and queues translated events, which pollevent()
+ * and wgetq() move into Icon's event lists.
  */
 
 #include "../sdl/sdlgfx.h"
@@ -114,31 +115,87 @@ static void mkgc(wbp w, sdlgc *g)
    g->cliph = wc->cliph;
    }
 
-/*
- * sdl_unmap() - release a window state's window (not its canvas).
- * Nothing to do until visible windows exist.
- */
-void sdl_unmap(wsp ws)
+static int nwins = 0;			/* windows open (not hidden canvases) */
+static unsigned long lastpresent;	/* when canvases were last shown */
+
+/* The platform state for an Icon window state. */
+static int plstate(int iconic)
    {
-   ws->win = NULL;
+   switch (iconic) {
+   case HiddenState:	return PL_HIDDEN;
+   case IconicState:	return PL_ICONIC;
+   case MaximizedState:	return PL_MAXIMAL;
+   default:		return PL_NORMAL;
+   }
    }
 
 /*
- * wmap() - make the canvas (and, eventually, the window) for w.
+ * sdl_unmap() - release a window state's window (not its canvas).
+ */
+void sdl_unmap(wsp ws)
+   {
+   if (ws->win) {
+      pl_close(ws->win);
+      ws->win = NULL;
+      nwins--;
+      }
+   }
+
+/*
+ * present() - show what changed in each window's canvas.
+ */
+static void present(int full)
+   {
+   wsp ws;
+   for (ws = wstates; ws; ws = ws->next)
+      if (ws->win && ws->canvas)
+	 pl_present(ws->win, ws->canvas, ws->width, ws->height, full);
+   lastpresent = millisec();
+   }
+
+/*
+ * mkwin() - make the platform window for ws (which has a canvas, or is
+ * about to: *scale receives the scale for it).
+ */
+static int mkwin(wbp w, int *scale)
+   {
+   wsp ws = w->window;
+   ws->win = pl_open(ws->windowlabel ? ws->windowlabel : "",
+      ws->posx == -(MaxInt) ? PL_NOPOS : ws->posx,
+      ws->posy == -(MaxInt) ? PL_NOPOS : ws->posy,
+      ws->width, ws->height, plstate(ws->iconic), ISRESIZABLE(w) != 0, scale);
+   if (ws->win == NULL)
+      return Failed;
+   nwins++;
+   return Succeeded;
+   }
+
+/* show a newly made window and its canvas */
+static void showwin(wbp w)
+   {
+   wsp ws = w->window;
+   pl_present(ws->win, ws->canvas, ws->width, ws->height, 1);
+   pl_state(ws->win, plstate(ws->iconic));
+   SETEXPOSED(w);
+   }
+
+/*
+ * wmap() - make the canvas and, unless it is hidden, the window for w.
  */
 static int wmap(wbp w)
    {
    wsp ws = w->window;
    wcp wc = w->context;
    sdlgc g;
-   int r;
+   int r, scale = 1;
    struct imgdata *imd;
 
-   if (ws->iconic != HiddenState)
-      return Failed;			/* visible windows: not yet */
+   if (ws->iconic != HiddenState && ws->win == NULL)
+      if (mkwin(w, &scale) != Succeeded)
+	 return Failed;
 
    if (ws->canvas == NULL) {
-      ws->canvas = cv_new(ws->width, ws->height, 1, wc->bg);
+      ws->canvas = cv_new(ws->width, ws->height, scale, wc->bg);
       if (ws->canvas == NULL)
 	 return Failed;
       ws->pixwidth = ws->width;
@@ -181,6 +238,8 @@ static int wmap(wbp w)
    if (wc->patternname != NULL)
       if (SetPattern(w, wc->patternname, strlen(wc->patternname)) != Succeeded)
 	 return Failed;
+   if (ws->win)
+      showwin(w);
    return Succeeded;
    }
 
@@ -191,13 +250,142 @@ static int wmap(wbp w)
  */
 
 /*
+ * Mouse buttons in the order last pressed, as rxwin.ri's handle_mouse
+ * keeps them: a drag reports the most recently pressed button.
+ */
+static int buttonorder[3] = { 1, 2, 3 };
+static int presscount = 0;
+
+static void btn_front(int b)
+   {
+   int i, j;
+   for (i = 0; i < 3 && buttonorder[i] != b; i++) ;
+   for (j = i; j > 0; j--)
+      buttonorder[j] = buttonorder[j - 1];
+   buttonorder[0] = b;
+   }
+
+static void btn_back(int b)
+   {
+   int i, j;
+   for (i = 0; i < 3 && buttonorder[i] != b; i++) ;
+   for (j = i; j < 2; j++)
+      buttonorder[j] = buttonorder[j + 1];
+   buttonorder[2] = b;
+   }
+
+/*
+ * process_events() - move the platform layer's queued events into the
+ * windows' Icon event lists. Returns -1 if a window was closed by the
+ * user (X reports that as run-time error 141), else 1.
+ */
+static int process_events()
+   {
+   pl_event e;
+   wsp ws;
+   struct descrip d;
+   int code, rv = 1;
+
+   while (pl_poll(&e)) {
+      for (ws = wstates; ws; ws = ws->next)
+	 if (ws->win && ws->win == e.win)
+	    break;
+      if (ws == NULL)
+	 continue;			/* window already gone */
+      switch (e.kind) {
+      case PL_KEYCHAR:
+	 StrLen(d) = 1;
+	 StrLoc(d) = (char *)&allchars[e.code & 0xFF];
+	 ws->pointerx = e.x;
+	 ws->pointery = e.y;
+	 qevent(ws, &d, e.x, e.y, (uword)e.ms, e.mods);
+	 break;
+      case PL_KEYSYM:
+	 MakeInt(e.code, &d);
+	 ws->pointerx = e.x;
+	 ws->pointery = e.y;
+	 qevent(ws, &d, e.x, e.y, (uword)e.ms, e.mods);
+	 break;
+      case PL_PRESS:
+      case PL_RELEASE:
+	 if (e.kind == PL_PRESS) {
+	    presscount++;
+	    btn_front(e.code);
+	    code = MOUSELEFT - (e.code - 1);
+	    }
+	 else {
+	    if (--presscount < 0) presscount = 0;
+	    btn_back(e.code);
+	    code = MOUSELEFTUP - (e.code - 1);
+	    }
+	 ws->pointerx = e.x;
+	 ws->pointery = e.y;
+	 MakeInt(code, &d);
+	 qevent(ws, &d, e.x, e.y, (uword)e.ms, e.mods);
+	 break;
+      case PL_MOTION:
+	 ws->pointerx = e.x;
+	 ws->pointery = e.y;
+	 if (presscount == 0)
+	    break;
+	 MakeInt(MOUSELEFTDRAG - (buttonorder[0] - 1), &d);
+	 qevent(ws, &d, e.x, e.y, (uword)e.ms, e.mods);
+	 break;
+      case PL_RESIZE: {			/* as rxwin.ri's handle_config */
+	 wbp wb;
+	 for (wb = wbndngs; wb && wb->window != ws; wb = wb->next) ;
+	 if (wb == NULL)
+	    break;
+	 if (ws->x > e.x - FWIDTH(wb)) ws->x = e.x - FWIDTH(wb);
+	 if (ws->y > e.y) ws->y = e.y;
+	 if (e.x == (int)ws->width && e.y == (int)ws->height)
+	    break;
+	 ws->width = e.x;
+	 ws->height = e.y;
+	 cv_resize(ws->canvas, e.x, e.y, wb->context->bg);
+	 if (e.x > ws->pixwidth) ws->pixwidth = e.x;
+	 if (e.y > ws->pixheight) ws->pixheight = e.y;
+	 pl_present(ws->win, ws->canvas, ws->width, ws->height, 1);
+	 if (ISEXPOSED(wb)) {
+	    MakeInt(RESIZED, &d);
+	    qevent(ws, &d, ws->width, ws->height, ~(uword)0, 0);
+	    }
+	 break;
+	 }
+      case PL_MOVE:
+	 ws->posx = e.x;
+	 ws->posy = e.y;
+	 break;
+      case PL_EXPOSE:
+	 ws->bits |= 256;			/* SETEXPOSED */
+	 break;
+      case PL_STATE:
+	 ws->iconic = e.code == PL_ICONIC ? IconicState :
+	    (e.code == PL_MAXIMAL ? MaximizedState : NormalState);
+	 break;
+      case PL_CLOSE:
+	 rv = -1;
+	 break;
+	 }
+      }
+   return rv;
+   }
+
+/*
  * pollevent() is called by the interpreter every few hundred
- * instructions in any graphics build; with no windows open it must cost
- * nothing (and must not start SDL). Returns the number of instructions
- * until the next poll.
+ * instructions in any graphics build. With no windows open it costs
+ * nothing (and SDL is never started). Otherwise it collects events and,
+ * at most 60 times a second, shows what was drawn. Returns the number of
+ * instructions until the next poll, or -1 if the user closed a window.
  */
 int pollevent()
    {
+   if (nwins == 0)
+      return 400;
+   if (process_events() < 0)
+      return -1;
+   if (millisec() - lastpresent >= 16)
+      present(0);
    return 400;
    }
 
@@ -288,20 +476,28 @@ int wclose(wbp w)
    return 0;
    }
 
-void wflush(wbp w) { }
-void wsync(wbp w) { }
+void wflush(wbp w) { if (nwins) present(0); }
+void wsync(wbp w) { if (nwins) present(0); }
 
 /*
- * wgetq() - get the next event for w. A hidden canvas never receives
- * one: report the window as closed rather than waiting forever.
+ * wgetq() - get the next event for w, waiting for one if need be (and
+ * showing everything drawn so far first). A hidden canvas never receives
+ * an event: report it as closed rather than waiting forever.
  */
 int wgetq(wbp w, dptr res)
    {
-   if (!EVQUEEMPTY(w)) {
-      EVQUEGET(w, *res);
-      return 1;
+   for (;;) {
+      if (nwins && process_events() < 0)
+	 return -1;
+      if (!EVQUEEMPTY(w)) {
+	 EVQUEGET(w, *res);
+	 return 1;
+	 }
+      if (w->window->win == NULL)
+	 return -1;
+      present(0);
+      pl_wait(-1);
       }
-   return -1;
    }
 
 /*
@@ -1070,10 +1266,20 @@ int setgeometry(wbp w, char *geo)
 int do_config(wbp w, int status)
    {
    wsp ws = w->window;
+   int x, y;
    if (ws->canvas) {
       cv_resize(ws->canvas, ws->width, ws->height, w->context->bg);
       if ((int)ws->width > ws->pixwidth) ws->pixwidth = ws->width;
       if ((int)ws->height > ws->pixheight) ws->pixheight = ws->height;
+      }
+   if (ws->win) {
+      x = (status == 2 || ws->posx == -(MaxInt)) ? PL_NOPOS : ws->posx;
+      y = (status == 2 || ws->posy == -(MaxInt)) ? PL_NOPOS : ws->posy;
+      if (status == 1)
+	 pl_geometry(ws->win, x, y, 0, 0);
+      else
+	 pl_geometry(ws->win, x, y, ws->width, ws->height);
+      pl_present(ws->win, ws->canvas, ws->width, ws->height, 1);
       }
    return Succeeded;
    }
@@ -1082,32 +1288,53 @@ int allowresize(wbp w, int on)
    {
    if (on) SETRESIZABLE(w);
    else CLRRESIZABLE(w);
+   if (w->window->win)
+      pl_resizable(w->window->win, on);
    return Succeeded;
    }
 
-int getpos(wbp w) { return Succeeded; }
+int getpos(wbp w)
+   {
+   wsp ws = w->window;
+   int x, y;
+   if (ws->win && pl_position(ws->win, &x, &y)) {
+      ws->posx = x;
+      ws->posy = y;
+      }
+   return Succeeded;
+   }
 
 /*
- * setcanvas() - hidden or visible. Only "hidden" is possible until the
- * platform layer is ported, and only before the window is mapped.
+ * setcanvas() - hidden, normal, iconic (minimised) or maximal. Showing a
+ * hidden canvas makes its window then (the canvas keeps its scale).
  */
 int setcanvas(wbp w, char *s)
    {
    wsp ws = w->window;
-   if (!strcmp(s, "hidden")) {
-      if (ws->canvas && ws->iconic != HiddenState)
+   int state, scale;
+
+   if (!strcmp(s, "hidden")) state = HiddenState;
+   else if (!strcmp(s, "normal")) state = NormalState;
+   else if (!strcmp(s, "iconic")) state = IconicState;
+   else if (!strcmp(s, "maximal")) state = MaximizedState;
+   else return Error;
+
+   ws->iconic = state;
+   if (ws->canvas == NULL)		/* not yet mapped: wmap does it */
+      return Succeeded;
+   if (state == HiddenState) {
+      if (ws->win)
+	 pl_state(ws->win, PL_HIDDEN);
+      return Succeeded;
+      }
+   if (ws->win == NULL) {
+      if (mkwin(w, &scale) != Succeeded)
 	 return Failed;
-      ws->iconic = HiddenState;
-      return Succeeded;
+      showwin(w);
       }
-   if (!strcmp(s, "normal") || !strcmp(s, "iconic") || !strcmp(s, "maximal")) {
-      if (ws->canvas)
-	 return Failed;			/* showing a hidden canvas: not yet */
-      ws->iconic = !strcmp(s, "normal") ? NormalState :
-	 (!strcmp(s, "iconic") ? IconicState : MaximizedState);
-      return Succeeded;
-      }
-   return Error;
+   else
+      pl_state(ws->win, plstate(state));
+   return Succeeded;
    }
 
 void getcanvas(wbp w, char *s)
@@ -1136,13 +1363,20 @@ int setwindowlabel(wbp w, char *val)
    {
    if (w->window->windowlabel) free(w->window->windowlabel);
    w->window->windowlabel = salloc(val);
+   if (w->window->win)
+      pl_title(w->window->win, val);
    return Succeeded;
    }
 int seticonpos(wbp w, char *s) { return Failed; }
 int geticonpos(wbp w, char *s) { return Failed; }
-int raiseWindow(wbp w) { return Succeeded; }
-int lowerWindow(wbp w) { return Succeeded; }
-int walert(wbp w, int volume) { return Succeeded; }
+int raiseWindow(wbp w)
+   {
+   if (w->window->win)
+      pl_raise(w->window->win);
+   return Succeeded;
+   }
+int lowerWindow(wbp w) { return Succeeded; }	/* SDL cannot lower */
+int walert(wbp w, int volume) { pl_beep(); return Succeeded; }
 
 /*
  * ---------------------------------------------------------------------
@@ -1150,11 +1384,61 @@ int walert(wbp w, int volume) { return Succeeded; }
  * ---------------------------------------------------------------------
  */
 
+/*
+ * Pointer shapes: X's cursor-font names, mapped to the nearest of SDL's
+ * system cursors (SDL_SystemCursor values). Any other name fails, as in
+ * X.
+ */
+static stringint cursorsyms[] = {
+  { 0, 78},
+  {"X cursor", PLC_NO}, {"arrow", PLC_DEFAULT},
+  {"based arrow down", PLC_NS}, {"based arrow up", PLC_NS},
+  {"boat", PLC_DEFAULT}, {"bogosity", PLC_NO},
+  {"bottom left corner", PLC_SW}, {"bottom right corner", PLC_SE},
+  {"bottom side", PLC_S}, {"bottom tee", PLC_DEFAULT},
+  {"box spiral", PLC_WAIT}, {"center ptr", PLC_DEFAULT},
+  {"circle", PLC_NO}, {"clock", PLC_WAIT}, {"coffee mug", PLC_WAIT},
+  {"cross", PLC_CROSSHAIR}, {"cross reverse", PLC_CROSSHAIR},
+  {"crosshair", PLC_CROSSHAIR}, {"diamond cross", PLC_CROSSHAIR},
+  {"dot", PLC_DEFAULT}, {"dotbox", PLC_DEFAULT}, {"double arrow", PLC_NS},
+  {"draft large", PLC_DEFAULT}, {"draft small", PLC_DEFAULT},
+  {"draped box", PLC_DEFAULT}, {"exchange", PLC_DEFAULT},
+  {"fleur", PLC_MOVE}, {"gobbler", PLC_DEFAULT}, {"gumby", PLC_DEFAULT},
+  {"hand1", PLC_POINTER}, {"hand2", PLC_POINTER}, {"heart", PLC_DEFAULT},
+  {"icon", PLC_DEFAULT}, {"iron cross", PLC_CROSSHAIR},
+  {"left ptr", PLC_DEFAULT}, {"left side", PLC_W},
+  {"left tee", PLC_DEFAULT}, {"leftbutton", PLC_DEFAULT},
+  {"ll angle", PLC_DEFAULT}, {"lr angle", PLC_DEFAULT},
+  {"man", PLC_DEFAULT}, {"middlebutton", PLC_DEFAULT},
+  {"mouse", PLC_DEFAULT}, {"num glyphs", PLC_DEFAULT},
+  {"pencil", PLC_CROSSHAIR}, {"pirate", PLC_NO},
+  {"plus", PLC_CROSSHAIR}, {"question arrow", PLC_DEFAULT},
+  {"right ptr", PLC_DEFAULT}, {"right side", PLC_E},
+  {"right tee", PLC_DEFAULT}, {"rightbutton", PLC_DEFAULT},
+  {"rtl logo", PLC_DEFAULT}, {"sailboat", PLC_DEFAULT},
+  {"sb down arrow", PLC_NS}, {"sb h double arrow", PLC_EW},
+  {"sb left arrow", PLC_EW}, {"sb right arrow", PLC_EW},
+  {"sb up arrow", PLC_NS}, {"sb v double arrow", PLC_NS},
+  {"shuttle", PLC_DEFAULT}, {"sizing", PLC_MOVE}, {"spider", PLC_DEFAULT},
+  {"spraycan", PLC_DEFAULT}, {"star", PLC_DEFAULT},
+  {"target", PLC_CROSSHAIR}, {"tcross", PLC_CROSSHAIR},
+  {"top left arrow", PLC_DEFAULT}, {"top left corner", PLC_NW},
+  {"top right corner", PLC_NE}, {"top side", PLC_N},
+  {"top tee", PLC_DEFAULT}, {"trek", PLC_DEFAULT},
+  {"ul angle", PLC_DEFAULT}, {"umbrella", PLC_DEFAULT},
+  {"ur angle", PLC_DEFAULT}, {"watch", PLC_WAIT}, {"xterm", PLC_TEXT},
+};
+
 int setpointer(wbp w, char *val)
    {
    wsp ws = w->window;
+   int c = si_s2i(cursorsyms, val);
+   if (c < 0)
+      return Failed;
    if (ws->cursorname) free(ws->cursorname);
    ws->cursorname = salloc(val);
+   if (ws->win)
+      pl_cursor(ws->win, c);
    return Succeeded;
    }
 
@@ -1163,7 +1447,11 @@ void getpointername(wbp w, char *answer)
    strcpy(answer, w->window->cursorname ? w->window->cursorname : "left ptr");
    }
 
-void warpPointer(wbp w, int x, int y) { }
+void warpPointer(wbp w, int x, int y)
+   {
+   if (w->window->win)
+      pl_warp(w->window->win, x, y);
+   }
 
 int query_pointer(wbp w, XPoint *pp)
    {
@@ -1172,7 +1460,15 @@ int query_pointer(wbp w, XPoint *pp)
    return Succeeded;
    }
 
-int query_rootpointer(XPoint *pp) { return Failed; }
+int query_rootpointer(XPoint *pp)
+   {
+   int x, y;
+   if (!pl_global_mouse(&x, &y))
+      return Failed;
+   pp->x = x;
+   pp->y = y;
+   return Succeeded;
+   }
 
 int setdisplay(wbp w, char *s) { return Failed; }
 void getdisplay(wbp w, char *answer) { *answer = '\0'; }
@@ -1182,5 +1478,15 @@ int getvisual(wbp w, char *answer)
    return Succeeded;
    }
 int getdefault(wbp w, char *prog, char *opt, char *answer) { return Failed; }
-int displayHeight(wbp w) { return 0; }
-int displayWidth(wbp w) { return 0; }
+int displayHeight(wbp w)
+   {
+   int dw = 0, dh = 0;
+   pl_display_size(w->window->win, &dw, &dh);
+   return dh;
+   }
+int displayWidth(wbp w)
+   {
+   int dw = 0, dh = 0;
+   pl_display_size(w->window->win, &dw, &dh);
+   return dw;
+   }

@@ -1,0 +1,6 @@
+# Window test: closing a window from its title bar ends the program
+# with run-time error 141, as with X.
+procedure main()
+   &window := open("close", "g", "size=100,100") | stop("cannot open window")
+   repeat Event()
+end

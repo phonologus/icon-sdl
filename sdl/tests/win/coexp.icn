@@ -1,0 +1,25 @@
+# Window test: windows used from a co-expression (in Icon 9.5 a separate
+# thread with a 16 KB C stack): opening, drawing, loading fonts, and
+# reading events; then the main program uses the same window.
+procedure body()
+   w := open("coexp", "g", "size=200,100") | stop("cannot open window")
+   Font(w, "serif,italic,18")
+   DrawString(w, 10, 30, "from a co-expression")
+   Fg(w, "green"); FillCircle(w, 150, 60, 20)
+   suspend w
+   write("event in co-expression: ", image(Event(w)))
+end
+
+procedure main()
+   c := create body()
+   w := @c
+   write("opened in co-expression: ", image(type(w)))
+   write("font there: ", WAttrib(w, "font"))
+   write("event in main: ", image(Event(w)))
+   @c
+   Font(w, "mono,bold,14")
+   DrawString(w, 10, 80, "and from main")
+   write("pixel drawn there: ", Pixel(w, 150, 60, 1, 1))
+   close(w)
+   write("done")
+end

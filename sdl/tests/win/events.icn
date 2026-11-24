@@ -1,0 +1,15 @@
+# Window test: events as Icon sees them. Run by run.sh with a scripted
+# input sequence (ICONSDL_TEST_EVENTS); see events.std for X's answers.
+procedure main()
+   &window := open("events", "g", "size=200,100") | stop("cannot open window")
+   repeat {
+      e := Event()
+      s := image(e)
+      if integer(e) < 0 then s ||:= " at " || &x || "," || &y
+      s ||:= " [" || ((&shift, "S") | "") || ((&control, "C") | "") ||
+         ((&meta, "M") | "") || "]"
+      write(s)
+      if e === "q" then break
+      }
+   close(&window)
+end

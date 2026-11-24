@@ -72,3 +72,83 @@ int cv_take_dirty(void *cv, int r[4]);
 void *ft_open(const char *family, int bold, int italic, int size);
 void ft_metrics(void *f, int *ascent, int *descent, int *maxwidth);
 int ft_width(void *f, const char *s, int n);
+
+/*
+ * The platform layer (plat.c): windows and events. All SDL calls run on
+ * the process's main thread; these functions may be called from any
+ * Icon thread.
+ */
+
+/* Run the interpreter, f(argc, argv), on a new thread; serve windows
+ * from this (the main) thread. Does not return. */
+int pl_main(int (*f)(int, char **), int argc, char **argv);
+
+/* window states */
+#define PL_NORMAL	0
+#define PL_ICONIC	1
+#define PL_MAXIMAL	2
+#define PL_HIDDEN	3
+
+/* x, y may be PL_NOPOS (INT_MIN) to let the system place the window;
+ * *scale receives the canvas scale to use (the display's density) */
+#define PL_NOPOS	(-2147483647 - 1)
+void *pl_open(const char *title, int x, int y, int w, int h, int state,
+   int resizable, int *scale);
+void pl_close(void *win);
+void pl_show(void *win);
+void pl_present(void *win, void *canvas, int lw, int lh, int full);
+void pl_title(void *win, const char *s);
+void pl_geometry(void *win, int x, int y, int w, int h);
+int pl_position(void *win, int *x, int *y);
+void pl_state(void *win, int state);
+void pl_resizable(void *win, int on);
+void pl_raise(void *win);
+void pl_cursor(void *win, int cursor);	/* PLC_* */
+
+/* pointer shapes: SDL's SDL_SystemCursor values */
+#define PLC_DEFAULT	0
+#define PLC_TEXT	1
+#define PLC_WAIT	2
+#define PLC_CROSSHAIR	3
+#define PLC_NS		8
+#define PLC_EW		7
+#define PLC_MOVE	9
+#define PLC_NO		10
+#define PLC_POINTER	11
+#define PLC_NW		12
+#define PLC_N		13
+#define PLC_NE		14
+#define PLC_E		15
+#define PLC_SE		16
+#define PLC_S		17
+#define PLC_SW		18
+#define PLC_W		19
+void pl_warp(void *win, int x, int y);
+void pl_beep(void);
+void pl_display_size(void *win, int *w, int *h);
+int pl_global_mouse(int *x, int *y);
+
+/* events, translated to X conventions: characters, X keysyms, X
+ * modifier masks, times in milliseconds */
+#define PL_KEYCHAR	1	/* code: the character */
+#define PL_KEYSYM	2	/* code: an X keysym */
+#define PL_PRESS	3	/* code: button 1, 2, 3 */
+#define PL_RELEASE	4
+#define PL_MOTION	5	/* code: SDL button mask */
+#define PL_RESIZE	6	/* x, y: new size */
+#define PL_MOVE		7	/* x, y: new position */
+#define PL_EXPOSE	8
+#define PL_STATE	9	/* code: PL_NORMAL, PL_ICONIC, PL_MAXIMAL */
+#define PL_CLOSE	10
+
+typedef struct {
+   void *win;
+   int kind;
+   long code;
+   int x, y;
+   long mods;
+   unsigned long ms;
+   } pl_event;
+
+int pl_poll(pl_event *e);		/* next event, or 0 if none */
+int pl_wait(int timeout_ms);		/* wait for one (-1: forever) */

@@ -14,8 +14,21 @@ static void ixopts(int argc, char *argv[], int *ip);
 /*
  * Initial interpreter entry point (for all remaining platforms).
  */
+#ifdef SDLGraphics
+   #include "../sdl/sdlgfx.h"
+#endif					/* SDLGraphics */
+
 int main(int argc, char *argv[]) {
+#ifdef SDLGraphics
+   /*
+    * The SDL graphics backend keeps the process's main thread for
+    * windows and events (as macOS requires) and runs the interpreter
+    * on a new thread.
+    */
+   return pl_main(iconx, argc, argv);
+#else					/* SDLGraphics */
    return iconx(argc, argv);
+#endif					/* SDLGraphics */
 }
 
 /*
