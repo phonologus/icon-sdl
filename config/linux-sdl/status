@@ -1,0 +1,33 @@
+System configuration:
+
+	Linux, with the SDL3 + Blend2D graphics backend of the icon-sdl
+	fork (X11 or Wayland). This configuration is not part of
+	upstream Icon; see README.md.
+
+Latest Icon version:
+
+	Version 9.5.25a of September 7, 2025
+
+Installer:
+
+	icon-sdl fork (github.com/phonologus/icon-sdl)
+
+Missing features:
+
+	See sdl/design.md.
+
+Known bugs:
+
+	None known
+
+Comments:
+
+	Install the packages in sdl/linux-packages.txt (Debian, Ubuntu;
+	see README.md for others), then "make SDL-Configure
+	name=linux-sdl", "make Icont" and "make Ilib". SDL3, Blend2D
+	and AsmJit are built from the checksum-pinned sources in deps/;
+	no network access is needed for the build.
+
+Date:
+
+	November 25, 2026

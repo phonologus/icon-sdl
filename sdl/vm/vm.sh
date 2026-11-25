@@ -8,6 +8,14 @@
 #   sdl/vm/vm.sh status     running or not
 #   sdl/vm/vm.sh ssh [CMD]  log in, or run CMD
 #   sdl/vm/vm.sh destroy    stop it and delete its disk (keeps the base image)
+#   sdl/vm/vm.sh provision  install (or update) its packages again
+#
+# The packages are those a user installs (sdl/linux-packages.txt) plus
+# the test VM's own tools (TESTPKGS: Xvfb, X fonts and headers for the
+# X11 reference build, Python for the test scripts). With
+# ICONSDL_VM_MINIMAL=1, none: only the pinned package sources, for
+# following the README's Linux instructions from nothing. Use
+# ICONSDL_VM_STATE and ICONSDL_VM_PORT to keep such a VM apart.
 #
 # Everything the VM needs is pinned: the Debian cloud image by SHA-512,
 # and its packages through snapshot.debian.org at a fixed date (see
@@ -25,6 +33,10 @@ IMG=debian-13-genericcloud-arm64-$IMG_BUILD.qcow2
 IMG_URL=https://cloud.debian.org/images/cloud/trixie/$IMG_BUILD/$IMG
 IMG_SHA512=ecbb14df864d2f8842539733c10d7251c58294f86b85a487b23b2c959a9b75f003df6b289deb20e1aee03ef65de2b1429818689e1fbc4b727d579c61b247fee9
 SNAPSHOT=20261116T000000Z
+
+TESTPKGS="git rsync ca-certificates pkg-config python3 xvfb xauth x11-utils
+   x11-apps xfonts-base xfonts-75dpi xfonts-100dpi xfonts-scalable
+   libxpm-dev libxt-dev fonts-dejavu-core weston libdecor-0-plugin-1-cairo"
 
 FW=$(cd "$(dirname "$(command -v qemu-system-aarch64)")/../share/qemu" && pwd)
 
@@ -110,10 +122,22 @@ create() {
    cp "$FW/edk2-arm-vars.fd" "$S/efivars.fd"
 
    start
-   echo "provisioning (packages from snapshot.debian.org at $SNAPSHOT)"
-   ssh_vm "sudo sh -s $SNAPSHOT" < "$here/provision.sh"
-   ssh_vm cat /var/local/packages.lock > "$here/packages.lock"
-   echo "VM ready; installed package versions recorded in sdl/vm/packages.lock"
+   provision
+}
+
+provision() {
+   pkgs=$(grep -v '^#' "$here/../linux-packages.txt" | tr '\n' ' ')
+   if [ "${ICONSDL_VM_MINIMAL:-}" = 1 ]; then
+      pkgs=""
+      lock="$S/packages.lock"
+   else
+      pkgs="$pkgs $(echo $TESTPKGS)"
+      lock="$here/packages.lock"
+   fi
+   echo "provisioning (packages from snapshot.debian.org at $SNAPSHOT): $pkgs"
+   ssh_vm "sudo sh -s $SNAPSHOT $pkgs" < "$here/provision.sh"
+   ssh_vm cat /var/local/packages.lock > "$lock"
+   echo "VM ready; installed package versions recorded in $lock"
 }
 
 destroy() {
@@ -129,6 +153,7 @@ start) start ;;
 stop) stop ;;
 status) if running; then echo running; else echo stopped; fi ;;
 ssh) shift; ssh_vm "$@" ;;
+provision) provision ;;
 destroy) destroy ;;
-*) sed -n '2,13p' "$0" >&2; exit 2 ;;
+*) sed -n '2,22p' "$0" >&2; exit 2 ;;
 esac

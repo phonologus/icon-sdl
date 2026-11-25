@@ -585,7 +585,7 @@ translation as real input.
 - XParseColor's numeric forms (`rgb:r/g/b`, `RGBi:…`) are not accepted.
 - A hidden canvas shown later keeps scale 1, so it is pixel-doubled on
   Retina.
-- Linux: fontconfig font lookup and a `linux-sdl` configuration.
+
 
 ## Keysyms in the IPL
 
@@ -687,3 +687,50 @@ spans of scattered segments merge into nearly full-width rows, which made
 it three times slower than drawing them one by one. The interpreter's
 speed with a window open equals upstream's: `pollevent()` costs nothing
 measurable.
+
+## Linux (2026-11-25)
+
+`make SDL-Configure name=linux-sdl` builds the same backend on Linux.
+
+- **Fonts:** `src/sdl/fontlinux.c` uses fontconfig. Icon's generic
+  families map to fontconfig's: `mono` and `fixed` to monospace, `sans` to
+  sans-serif, `serif` to serif, and `typewriter` to Nimbus Mono PS,
+  Liberation Mono, Courier New, Courier, then monospace. Only outline
+  fonts are used.
+- **Font names now fail as with X on both platforms.** Other names must
+  match the found font's family or full name, ignoring case. fontconfig
+  and CoreText would otherwise substitute a fallback silently: before
+  this, `Font("nosuchfont,12")` succeeded on macOS with Helvetica.
+- **Linking:** `config/linux-sdl/Makedefs` links the static SDL3 and
+  Blend2D with fontconfig and the C++ runtime. SDL loads X11 or Wayland
+  itself at run time (`Video drivers: … wayland(dynamic) x11(dynamic)`).
+  `src/sdl/CMakeLists.txt` stops with a message if SDL would be built
+  with neither.
+- **Packages:** the user's list is in `sdl/linux-packages.txt`. The
+  README tells users to install from it, and the test VM is provisioned
+  from it, plus its own tools (`TESTPKGS` in `vm.sh`).
+  `libdecor-0-plugin-1-gtk` is in the list on purpose. Under Wayland,
+  SDL draws title bars through libdecor, and on GNOME a window without a
+  libdecor plugin has no title bar at all. The plugin is only a
+  "recommended" package, so it would otherwise be missed.
+- **`build.sh`** works with GNU or BSD `sha256sum` and with `shasum`, by
+  comparing the printed checksum.
+- **`Lower()` and `Alert()`** use Xlib under X11 and do nothing under
+  Wayland, which allows neither.
+
+Verified (2026-11-25), in the Debian 13 arm64 test VM:
+
+- `sdl/tests/linux-check.sh`: Icon's test suite; the reference
+  comparison, with the same results as macOS except text; and the window
+  tests under X11 (Xvfb) and Wayland (headless Weston, using libdecor's
+  Cairo plugin because headless Weston has no keyboard for the GTK
+  plugin).
+- **From nothing:** a VM with only the pinned package sources
+  (`ICONSDL_VM_MINIMAL=1`). The README's Linux steps, extracted from
+  `README.md` and run verbatim (with a copy of the tree standing in for
+  `git clone`), built everything. Icon's test suite, the reference
+  comparison, `vib` (with `-u`) and the window tests then passed.
+
+Not verified: other distributions (the Fedora package names in the README
+are untested), x86-64, and real desktops: the window tests ran under Xvfb
+and headless Weston.

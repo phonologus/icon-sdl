@@ -170,10 +170,11 @@ static double sdl_gamma(void)
 static wfp sdl_fonts = NULL;		/* all fonts opened, by name */
 
 /*
- * alc_font() - find or open the font named by Icon font spec *s.
- * Icon's portable families map to macOS fonts; "fixed" (X's default
- * font) is a small monospaced face; other names go to the platform's
- * font lookup as they are.
+ * alc_font() - find or open the font named by Icon font spec *s. The
+ * platform's font lookup (src/sdl/fontmac.c, fontlinux.c) maps Icon's
+ * portable families (mono, typewriter, sans, serif, and X's default
+ * "fixed", a small monospaced face) and fails for other names it does
+ * not have, as X does.
  */
 wfp alc_font(wbp w, char **s)
    {
@@ -188,7 +189,7 @@ wfp alc_font(wbp w, char **s)
 	 return f;
 
    if (!strcmp(*s, "fixed")) {
-      fam = "Menlo";
+      fam = "fixed";
       flags = 0;
       size = 11;
       }
@@ -197,12 +198,7 @@ wfp alc_font(wbp w, char **s)
 	 return NULL;
       if (size <= 0)
 	 size = DEFAULTFONTSIZE;
-      if (!strcmp(family, "mono")) fam = "Menlo";
-      else if (!strcmp(family, "typewriter")) fam = "Courier";
-      else if (!strcmp(family, "sans")) fam = "Helvetica";
-      else if (!strcmp(family, "serif")) fam = "Times";
-      else if (!strcmp(family, "fixed")) fam = "Menlo";
-      else fam = family;
+      fam = family;
       }
    face = ft_open(fam, (flags & (FONTFLAG_BOLD | FONTFLAG_DEMI)) != 0,
 		  (flags & (FONTFLAG_ITALIC | FONTFLAG_OBLIQUE)) != 0, size);

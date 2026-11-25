@@ -7,12 +7,16 @@ cd "$(dirname "$0")"
 DEPS=../../deps
 LOCK=$DEPS/deps.lock
 B=build
+# The SHA-256 of file $1: GNU or BSD sha256sum, or Perl's shasum.
+sha256() {
+   { sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | awk '{print $1; exit}'
+}
 
 grep -v '^#' "$LOCK" | while read -r name ver sha url; do
    [ -n "$name" ] || continue
    f="$DEPS/$name-$ver.tar.gz"
    [ -f "$f" ] || { echo "src/sdl: missing $f" >&2; exit 1; }
-   echo "$sha  $f" | shasum -a 256 -c --status \
+   [ "$(sha256 "$f")" = "$sha" ] \
       || { echo "src/sdl: checksum mismatch for $f" >&2; exit 1; }
 done
 

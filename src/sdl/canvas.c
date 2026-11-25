@@ -20,6 +20,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #include <blend2d/blend2d.h>
 #include "sdlgfx.h"

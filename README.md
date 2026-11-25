@@ -13,8 +13,8 @@ Icon project at the University of Arizona:
 
 Please don't report problems with this fork upstream.
 
-**Status: work in progress, usable on macOS.** The `macintosh-sdl`
-configuration builds and passes Icon's test suite. Windows, events and
+**Status: usable on macOS and Linux.** The `macintosh-sdl` and `linux-sdl`
+configurations build and pass Icon's test suite. Windows, events and
 hidden canvases work:
 - drawing, images and `Pixel()` match the X11 backend, most of it pixel
   for pixel;
@@ -22,7 +22,8 @@ hidden canvases work:
   reports them;
 - text uses the system's OpenType fonts.
 
-Linux is not yet done. `sdl/design.md` lists what is still missing.
+Linux works under both X11 and Wayland. `sdl/design.md` lists what is
+still missing.
 
 ## Building (macOS)
 
@@ -31,10 +32,41 @@ Linux is not yet done. `sdl/design.md` lists what is still missing.
     make Ilib
 
 You need the Xcode Command Line Tools and CMake. SDL3, Blend2D and AsmJit
-are built from the checksum-pinned sources in `deps/`. No network access,
-Homebrew or XQuartz is used. `make Ilib` builds the Icon Program Library,
+are built from the checksum-pinned sources in `deps/`, on macOS and Linux
+alike. No network access, Homebrew or XQuartz is used. `make Ilib` builds the Icon Program Library,
 which graphics programs such as `vib` need. The other configurations
 (`make Configure`, `make X-Configure`) work exactly as upstream.
+
+## Building (Linux)
+
+On Debian or Ubuntu, starting from nothing:
+
+    sudo apt-get install git
+    git clone https://github.com/phonologus/icon-sdl.git
+    cd icon-sdl
+    sudo apt-get install $(grep -v '^#' sdl/linux-packages.txt)
+    make SDL-Configure name=linux-sdl
+    make Icont
+    make Ilib
+
+`sdl/linux-packages.txt` lists what the build needs: compilers, CMake,
+fontconfig, and the X11 and Wayland development headers SDL3 needs for
+its video drivers. The build stops with a message if SDL would be built
+without both.
+
+On other distributions, install the equivalents. For Fedora, untested:
+`gcc gcc-c++ make cmake fontconfig-devel libX11-devel libXext-devel
+libXrandr-devel libXcursor-devel libXi-devel libXScrnSaver-devel
+libXfixes-devel libXtst-devel libxkbcommon-devel wayland-devel
+wayland-protocols-devel libdecor-devel mesa-libEGL-devel
+mesa-libGL-devel`.
+
+Under Wayland, SDL uses Wayland (`SDL_VIDEO_DRIVER=x11` makes it use X11
+through XWayland). Wayland does not let programs place their own
+windows, warp the pointer, lower windows or beep, so `pos=`,
+`WarpPointer()`, `Lower()` and `Alert()` do nothing there.
+
+## Using it
 
 Use this tree's `bin/icont`. Put `bin` first on your `PATH`, or name it
 explicitly, for example `make ICONT=/path/to/icon-sdl/bin/icont` for
@@ -57,6 +89,7 @@ Optional environment variables:
 | `sdl/tests/ref/run-sdl.sh .` | The reference graphics programs, against images and output from the X11 backend |
 | `sdl/tests/win/run.sh .` | Real windows and events, with scripted input (needs a display) |
 | `sdl/tests/ref/make-reference.sh --check` | Builds this tree with X11 in the test VM and checks that its output is unchanged |
+| `sdl/tests/linux-check.sh` | Builds `linux-sdl` in the test VM and runs all of the above there, with windows under both X11 (Xvfb) and Wayland (Weston) |
 
 ## Branches
 
@@ -73,14 +106,16 @@ listed here and is visible with `git diff master...sdl-graphics`.
 New files:
 
 - `README.md`, `LICENSE.md`: this notice and the licence of the new code.
-- `config/macintosh-sdl/`: the macOS configuration with the SDL backend.
+- `config/macintosh-sdl/`, `config/linux-sdl/`: the macOS and Linux
+  configurations with the SDL backend.
 - `src/h/sdlwin.h`, `src/runtime/rsdlwin.ri`, `src/runtime/rsdlrsc.ri`:
   the SDL backend (`SDLGraphics`), alongside the X11 and MS Windows ones.
 - `src/sdl/`: the backend's C code that uses SDL3 and Blend2D, and the
   build of the vendored libraries.
 - `deps/`: vendored, checksum-pinned sources for SDL3, Blend2D and AsmJit,
   with `deps/update.sh` to upgrade them.
-- `sdl/`: the new backend's design notes (`sdl/design.md`); X.Org's
+- `sdl/`: the new backend's design notes (`sdl/design.md`); the Linux
+  build's package list (`sdl/linux-packages.txt`); X.Org's
   `rgb.txt` and the script that turns it into `src/sdl/xcolors.c`
   (`sdl/tools/`, with X.Org's licence); a test VM
   (`sdl/vm/`, Debian under QEMU, fully pinned); reference graphics tests
