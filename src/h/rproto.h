@@ -347,6 +347,7 @@ int		bigrand		(dptr da, dptr dx);
       void	sdl_lcolor	(wbp w, unsigned int pix, long *r, long *g,
 				   long *b);
       void	sdl_unmap	(wsp ws);
+      void	pl_shutdown	(void);
    #endif				/* SDLGraphics */
 
    #ifdef WinGraphics

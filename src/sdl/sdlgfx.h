@@ -90,6 +90,10 @@ int ft_width(void *f, const char *s, int n);
  * from this (the main) thread. Does not return. */
 int pl_main(int (*f)(int, char **), int argc, char **argv);
 
+/* Before the interpreter exits: close the windows and shut SDL down on
+ * the main thread (called from c_exit; also registered with atexit). */
+void pl_shutdown(void);
+
 /* window states */
 #define PL_NORMAL	0
 #define PL_ICONIC	1

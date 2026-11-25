@@ -1,0 +1,25 @@
+# Packages needed to build icon-sdl on Fedora:
+#
+#   sudo dnf install $(grep -v '^#' sdl/linux-packages-fedora.txt)
+#
+# (Fedora's libdecor package includes the plugins that draw window title
+# bars under Wayland.) Tested on Fedora 45.
+gcc
+gcc-c++
+make
+cmake
+fontconfig-devel
+libX11-devel
+libXext-devel
+libXrandr-devel
+libXcursor-devel
+libXi-devel
+libXScrnSaver-devel
+libXfixes-devel
+libXtst-devel
+libxkbcommon-devel
+wayland-devel
+wayland-protocols-devel
+libdecor-devel
+mesa-libEGL-devel
+mesa-libGL-devel

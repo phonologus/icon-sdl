@@ -49,17 +49,22 @@ On Debian or Ubuntu, starting from nothing:
     make Icont
     make Ilib
 
-`sdl/linux-packages.txt` lists what the build needs: compilers, CMake,
-fontconfig, and the X11 and Wayland development headers SDL3 needs for
-its video drivers. The build stops with a message if SDL would be built
-without both.
+On Fedora, the same with Fedora's packages:
 
-On other distributions, install the equivalents. For Fedora, untested:
-`gcc gcc-c++ make cmake fontconfig-devel libX11-devel libXext-devel
-libXrandr-devel libXcursor-devel libXi-devel libXScrnSaver-devel
-libXfixes-devel libXtst-devel libxkbcommon-devel wayland-devel
-wayland-protocols-devel libdecor-devel mesa-libEGL-devel
-mesa-libGL-devel`.
+    sudo dnf install git
+    git clone https://github.com/phonologus/icon-sdl.git
+    cd icon-sdl
+    sudo dnf install $(grep -v '^#' sdl/linux-packages-fedora.txt)
+    make SDL-Configure name=linux-sdl
+    make Icont
+    make Ilib
+
+The package lists (`sdl/linux-packages.txt`,
+`sdl/linux-packages-fedora.txt`) give what the build needs: compilers,
+CMake, fontconfig, and the X11 and Wayland development headers SDL3 needs
+for its video drivers. The build stops with a message if SDL would be
+built without both. Tested from nothing on Debian 13 and Fedora 45
+(arm64).
 
 Under Wayland, SDL uses Wayland (`SDL_VIDEO_DRIVER=x11` makes it use X11
 through XWayland). Wayland does not let programs place their own
@@ -115,7 +120,8 @@ New files:
 - `deps/`: vendored, checksum-pinned sources for SDL3, Blend2D and AsmJit,
   with `deps/update.sh` to upgrade them.
 - `sdl/`: the new backend's design notes (`sdl/design.md`); the Linux
-  build's package list (`sdl/linux-packages.txt`); X.Org's
+  build's package lists (`sdl/linux-packages.txt`,
+  `sdl/linux-packages-fedora.txt`); X.Org's
   `rgb.txt` and the script that turns it into `src/sdl/xcolors.c`
   (`sdl/tools/`, with X.Org's licence); a test VM
   (`sdl/vm/`, Debian under QEMU, fully pinned); reference graphics tests
@@ -140,6 +146,8 @@ graphics output to upstream:
 - `src/runtime/imain.r`: with `SDLGraphics`, `main()` runs the
   interpreter on a new thread and keeps the main thread for windows, as
   macOS requires.
+- `src/runtime/init.r`: with `SDLGraphics`, `c_exit()` shuts the windows
+  and SDL down on the main thread before calling `exit()`.
 - `src/runtime/Makefile`: dependencies on the SDL backend files, and
   `$(XDEPS)` (empty unless the configuration sets it) so that iconx is
   relinked when `libiconsdl.a` changes.

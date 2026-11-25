@@ -731,6 +731,25 @@ Verified (2026-11-25), in the Debian 13 arm64 test VM:
   `git clone`), built everything. Icon's test suite, the reference
   comparison, `vib` (with `-u`) and the window tests then passed.
 
-Not verified: other distributions (the Fedora package names in the README
-are untested), x86-64, and real desktops: the window tests ran under Xvfb
-and headless Weston.
+**Fedora 45** (arm64, the official cloud image in QEMU, as a one-off): the
+README's Fedora steps (`sdl/linux-packages-fedora.txt`) installed and
+built everything. Icon's test suite, the reference comparison (identical
+results), `vib`, and ten runs each of the window suite under X11 and
+Wayland passed. Fedora's `libdecor` package includes its plugins.
+
+**Exit crash found on Fedora, fixed for all platforms.** The interpreter
+exits by calling `exit()` on its own thread, which runs the libraries'
+exit handlers (Mesa's, libdecor's) while the main thread may still be
+inside SDL. Under Wayland that crashed (aborted) on 7 of 30 exits. Now
+`c_exit()` (`init.r`, under `SDLGraphics`) first calls `pl_shutdown()`:
+the main thread closes the windows, calls `SDL_Quit()` and stops using
+SDL. `exit()` then runs safely: 0 crashes in 30 runs, and in ten runs of
+the full window suite. An `atexit` handler covers exits that bypass
+`c_exit`.
+
+In VMs without a GPU, Mesa prints warnings when SDL's Wayland driver
+initialises EGL. They are harmless; `sdl/tests/win/run.sh` drops them
+when `ICONSDL_TEST_IGNORE='^MESA'` is set.
+
+Not verified: x86-64, and real desktops (the window tests ran under Xvfb
+and headless Weston).

@@ -29,6 +29,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #include <SDL3/SDL.h>
 #include "sdlgfx.h"
 
@@ -389,6 +390,42 @@ static void init_sdl(void *unused)
  * pl_main() - run f(argc, argv) (the interpreter) on a new thread with a
  * stack as large as the main thread's, and serve it from this thread.
  */
+/*
+ * Shutting down. The interpreter exits by calling exit() on its own
+ * thread, which runs the libraries' exit handlers (Mesa's, libdecor's,
+ * ...) while the main thread may still be inside SDL: under Wayland that
+ * crashed. So before exit(), Icon's c_exit() calls pl_shutdown(), which
+ * asks the main thread to close the windows, shut SDL down and stop
+ * using it. (The atexit handler covers exits that bypass c_exit; it may
+ * run after handlers that libraries registered later.)
+ */
+static volatile int sdl_down;
+
+static void shutdown_cb(void *unused)
+{
+   (void)unused;
+   while (wins) {
+      Win *w = wins;
+      wins = w->next;
+      if (w->tex) SDL_DestroyTexture(w->tex);
+      SDL_DestroyRenderer(w->r);
+      SDL_DestroyWindow(w->sw);
+   }
+   SDL_Quit();
+   sdl_down = 1;
+}
+
+void pl_shutdown(void)
+{
+   if (sdl_up && !sdl_down && !SDL_IsMainThread())
+      call_main(shutdown_cb, NULL);
+}
+
+static void at_exit(void)
+{
+   pl_shutdown();
+}
+
 int pl_main(int (*f)(int, char **), int argc, char **argv)
 {
    static Start s;
@@ -402,6 +439,7 @@ int pl_main(int (*f)(int, char **), int argc, char **argv)
       else if (rl.rlim_cur > stack) stack = rl.rlim_cur;
    }
    s.f = f; s.argc = argc; s.argv = argv;
+   atexit(at_exit);			/* runs before the libraries' handlers */
    pthread_attr_init(&at);
    pthread_attr_setstacksize(&at, stack);
    if (pthread_create(&t, &at, interp, &s) != 0)
@@ -425,12 +463,14 @@ int pl_main(int (*f)(int, char **), int argc, char **argv)
    }
    pthread_mutex_unlock(&mu);
 
-   /* phase 2: SDL's event loop, forever (the interpreter exits) */
-   for (;;) {
+   /* phase 2: SDL's event loop, until the interpreter exits */
+   while (!sdl_down) {
       SDL_Event e;
       if (SDL_WaitEvent(&e))
          handle(&e);
    }
+   for (;;)				/* SDL is shut down: wait for exit() */
+      pause();
 }
 
 /* ---------- scripted input, for tests ---------- */

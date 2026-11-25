@@ -562,6 +562,9 @@ void c_exit(int i)
       xdisp(pfp,glbl_argp,k_level,stderr);
       }
    genprofile();		/* report execution profile, if enabled */
+#ifdef SDLGraphics
+   pl_shutdown();		/* close windows, stop SDL, before exit() */
+#endif					/* SDLGraphics */
    exit(i);
 
 }
